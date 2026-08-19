@@ -926,7 +926,7 @@ function makeCmdCtx(
       try {
         const quoted = m?.message?.extendedTextMessage?.contextInfo?.quotedMessage;
         if (!quoted) return null;
-        const buf = (await downloadMediaMessage(
+        const buf = (await (downloadMediaMessage as any)(
           { key: m.key, message: { extendedTextMessage: { contextInfo: { quotedMessage: quoted } } } } as any,
           "buffer",
           {}

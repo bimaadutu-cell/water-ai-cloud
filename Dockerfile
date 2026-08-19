@@ -7,6 +7,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 FROM base AS deps
+RUN apk add --no-cache git openssh-client
 COPY package.json package-lock.json* ./
 # npm ci needs package-lock.json; fall back to npm install if the lockfile
 # is missing from the repo.
