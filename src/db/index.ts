@@ -11,11 +11,12 @@ async function hashPassword(pw: string): Promise<string> {
   return `s:${salt}:${buf.toString("hex")}`;
 }
 
-const databaseUrl = process.env.DATABASE_URL || "postgres://postgres:postgres@localhost:5432/placeholder";
+const rawDatabaseUrl = process.env.DATABASE_URL || "postgres://postgres:postgres@localhost:5432/placeholder";
 
-if (!process.env.DATABASE_URL && process.env.NODE_ENV === "production" && process.env.NEXT_PHASE !== "phase-production-build") {
-  throw new Error("DATABASE_URL is required");
-}
+// Pastikan Railway/Production URL mendukung SSL jika diperlukan
+const useSsl = rawDatabaseUrl.includes("railway") || rawDatabaseUrl.includes("render") || rawDatabaseUrl.includes("neon") || rawDatabaseUrl.includes("supavisor") || rawDatabaseUrl.includes("sslmode=require");
+
+const databaseUrl = rawDatabaseUrl;
 
 const globalForDb = globalThis as typeof globalThis & {
   __arenaNextJsPostgresqlPool?: Pool;
@@ -26,6 +27,7 @@ export const pool =
   globalForDb.__arenaNextJsPostgresqlPool ??
   new Pool({
     connectionString: databaseUrl,
+    ssl: useSsl ? { rejectUnauthorized: false } : undefined,
   });
 
 if (process.env.NODE_ENV !== "production") {
@@ -174,8 +176,9 @@ async function ensureInitialized() {
     }
     globalForDb.__initializedDb = true;
   } catch (e) {
-    console.error("Database initialization error:", e);
+    console.error("CRITICAL DATABASE INITIALIZATION ERROR:", e);
   }
 }
 
-ensureInitialized().catch(() => {});
+// Jalankan inisialisasi segera saat modul dimuat agar tabel siap
+ensureInitialized().catch((e) => console.error("Failed to run init:", e));
