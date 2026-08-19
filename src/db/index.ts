@@ -62,6 +62,64 @@ if (process.env.NODE_ENV !== "production") {
 
 export const db = drizzle(pool);
 
+async function repairLegacyAuthTables() {
+  // Older deployments of WATER AI CLOUD used a different type for some
+  // auth foreign keys (for example INTEGER user_id -> UUID users.id).
+  // PostgreSQL refuses to create/validate such a foreign key, which makes
+  // the whole bootstrap fail and the login endpoint return HTTP 500.
+  //
+  // Password-reset, email-verification and session rows are disposable
+  // authentication state, so when their user_id type is incompatible we
+  // safely recreate those tables. Real users are kept untouched.
+  const tables = ["password_resets", "email_verifications", "sessions", "subscriptions"];
+
+  const usersId = await pool.query(`
+    SELECT data_type, udt_name
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'users'
+      AND column_name = 'id'
+    LIMIT 1
+  `);
+
+  if (!usersId.rows.length) return;
+
+  const usersIdType = String(usersId.rows[0].udt_name || "");
+  if (usersIdType !== "uuid") {
+    throw new Error(
+      `Skema database tidak kompatibel: public.users.id bertipe ${usersId.rows[0].data_type}, ` +
+      `sedangkan aplikasi membutuhkan UUID. Jangan hapus tabel users; migrasikan users.id terlebih dahulu.`
+    );
+  }
+
+  for (const table of tables) {
+    const column = await pool.query(
+      `
+        SELECT c.data_type, c.udt_name
+        FROM information_schema.columns c
+        WHERE c.table_schema = 'public'
+          AND c.table_name = $1
+          AND c.column_name = 'user_id'
+        LIMIT 1
+      `,
+      [table]
+    );
+
+    if (!column.rows.length) continue;
+
+    const userIdType = String(column.rows[0].udt_name || "");
+    if (userIdType !== "uuid") {
+      console.warn(
+        `[DB MIGRATION] ${table}.user_id bertipe ${userIdType}; ` +
+        `recreating ${table} with UUID user_id.`
+      );
+      // These tables contain only auth/session/billing linkage. Recreating
+      // an incompatible table is safer than trying an invalid cast.
+      await pool.query(`DROP TABLE IF EXISTS "${table}" CASCADE;`);
+    }
+  }
+}
+
 async function ensureInitialized() {
   if (globalForDb.__initializedDb) return;
 
@@ -74,6 +132,11 @@ async function ensureInitialized() {
 
   try {
     await pool.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto;`);
+
+    // Repair legacy schema mismatches before CREATE TABLE statements that
+    // contain UUID foreign keys. This specifically fixes the Railway error:
+    // "foreign key constraint password_resets_user_id_fkey cannot be implemented".
+    await repairLegacyAuthTables();
 
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
