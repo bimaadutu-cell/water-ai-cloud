@@ -94,8 +94,8 @@ export async function POST(req: Request, ctx: Ctx) {
     }
   } catch (e) {
     if (e instanceof ApiError) return jsonFail(e.code, e.message, e.status);
-    console.error(`[auth:${a}]`, e);
-    return jsonFail("INTERNAL", "Terjadi kesalahan pada server", 500);
+    console.error(`[auth:${a}] CRITICAL ERROR:`, e instanceof Error ? e.stack || e.message : e);
+    return jsonFail("INTERNAL", `Terjadi kesalahan pada server: ${e instanceof Error ? e.message : String(e)}`, 500);
   }
 }
 

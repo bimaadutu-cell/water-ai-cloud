@@ -422,8 +422,26 @@ async function ensureInitialized() {
       );
     `);
 
-    // Repair older installations created by the previous bootstrap.
+    // Repair and ensure all columns and unique indexes exist on existing tables
     await pool.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS suspended BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(12) NOT NULL DEFAULT 'USER';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS plan VARCHAR(20) NOT NULL DEFAULT 'FREE';
+
+      ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_agent TEXT;
+      ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ip VARCHAR(64);
+      ALTER TABLE sessions ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+      ALTER TABLE sessions ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+      CREATE UNIQUE INDEX IF NOT EXISTS sessions_token_hash_unique ON sessions(token_hash);
+
+      ALTER TABLE password_resets ADD COLUMN IF NOT EXISTS used_at TIMESTAMPTZ;
+      CREATE UNIQUE INDEX IF NOT EXISTS password_resets_token_unique ON password_resets(token);
+
+      ALTER TABLE email_verifications ADD COLUMN IF NOT EXISTS used_at TIMESTAMPTZ;
+      CREATE UNIQUE INDEX IF NOT EXISTS email_verifications_token_unique ON email_verifications(token);
+
       ALTER TABLE system_settings
         DROP CONSTRAINT IF EXISTS system_settings_key_key;
       CREATE UNIQUE INDEX IF NOT EXISTS system_settings_key_unique
@@ -433,6 +451,7 @@ async function ensureInitialized() {
       ALTER TABLE logs ADD COLUMN IF NOT EXISTS request_id VARCHAR(48);
 
       ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+      ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active';
     `);
 
     const adminCheck = await pool.query(
