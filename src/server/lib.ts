@@ -206,8 +206,7 @@ export async function checkOrigin(req: Request) {
     const h = await headers();
     const host = h.get("host") || "";
     const appHost = new URL(APP_URL).host;
-    // Relaxed check for cloud hosting
-    if (o.host !== host && o.host !== appHost && !host.includes("railway.app") && !o.host.includes("railway.app")) {
+    if (o.host !== host && o.host !== appHost) {
       throw new ApiError("ORIGIN_MISMATCH", 403, "Origin tidak dikenali.");
     }
   } catch (e) {
@@ -257,10 +256,20 @@ export async function getPlans(): Promise<Plan[]> {
   return p && p.length ? p : [];
 }
 
+const BUILTIN_BOT_LIMITS: Record<string, number> = {
+  free: 1,
+  starter: 3,
+  pro: 10,
+  business: 25,
+  enterprise: 999,
+};
+
 export async function planBotLimit(planName: string): Promise<number> {
   const plans = await getPlans();
   const p = plans.find((x) => x.id === planName.toLowerCase());
-  return p?.botLimit ?? 1;
+  if (p?.botLimit) return p.botLimit;
+  // Fallback when pricing has not been seeded yet (fresh deployment race)
+  return BUILTIN_BOT_LIMITS[planName.toLowerCase()] ?? 1;
 }
 
 /* ------------------------------- logging ------------------------------ */

@@ -1,35 +1,29 @@
 # WATER AI CLOUD — production image
+# Self-healing: on every boot scripts/start.sh runs schema migration + seed,
+# so a stale/empty Railway Postgres recovers automatically.
+
 FROM node:20-alpine AS base
 WORKDIR /app
+ENV NODE_ENV=production
 
 FROM base AS deps
-# Install libc6-compat and build essentials for native dependencies like sharp
-RUN apk add --no-cache libc6-compat python3 make g++
 COPY package.json package-lock.json* ./
-# Install ALL dependencies (including devDependencies needed for Tailwind 4 / PostCSS build)
-RUN npm ci
+# npm ci needs package-lock.json; fall back to npm install if the lockfile
+# is missing from the repo.
+RUN npm ci --no-audit --no-fund || npm install --no-audit --no-fund
 
 FROM base AS build
-WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
-ENV NEXT_PHASE=phase-production-build
 RUN npm run build
 
 FROM base AS run
-WORKDIR /app
-ENV NODE_ENV=production
-RUN apk add --no-cache libc6-compat
-# Copy node_modules and built output from build stage
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/.next ./.next
-COPY --from=build /app/public ./public
-COPY --from=build /app/package.json ./package.json
-COPY --from=build /app/src ./src
-
-RUN mkdir -p /app/data && chown -R node:node /app/data
+COPY --from=build /app ./
+RUN mkdir -p /app/data/bots /app/data/tmp && chown -R node:node /app/data
 USER node
 EXPOSE 3000
 ENV PORT=3000
-CMD ["npm", "start"]
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s \
+  CMD wget -qO- http://localhost:3000/api/health || exit 1
+CMD ["sh", "scripts/start.sh"]

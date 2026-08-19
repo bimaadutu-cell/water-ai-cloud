@@ -17,6 +17,30 @@ AI integration, dashboard real-time (SSE), billing, admin panel, dan PWA.
 | Validasi | Zod |
 | Realtime | Server-Sent Events (tanpa polling berlebihan) |
 
+## Deploy ke Railway (panduan)
+
+1. Push repo ke GitHub — **WAJIB commit `package-lock.json`** (tanpa lockfile `npm ci` akan gagal).
+2. Railway → New Project → Deploy from GitHub repo.
+3. Railway akan otomatis memakai `railway.json` (builder **Dockerfile**). Kalau sebelumnya memakai Nixpacks, ubah: Settings → Build → Builder = **Dockerfile** (Nixpacks install tanpa devDependencies sehingga Tailwind gagal di-build).
+4. Tambah **Railway Postgres** ke project yang sama, lalu set environment variables:
+   - `DATABASE_URL` — otomatis terisi oleh plugin Railway Postgres
+   - `APP_URL` — domain publik Railway (mis. `https://water-ai-cloud-v2.up.railway.app`)
+   - `ADMIN_INITIAL_PASSWORD` — (opsional) password awal akun admin; default `Water@2026`
+   - `AI_API_KEY` — (opsional) untuk command AI
+5. Deploy. **Setiap boot** server menjalankan `scripts/migrate.mjs` (auto-migrasi skema + seed admin/pricing, idempotent) sehingga:
+   - kolom sisa versi lama (mis. `users.password`) dihapus otomatis
+   - skema sinkron dengan `src/db/schema.ts`
+   - akun admin & pricing selalu ada
+   - login/register/dashboard langsung berfungsi tanpa migrasi manual
+
+> Kalau deploy sebelumnya pernah gagal dengan error `null value in column "password"`,
+> `operator does not exist: uuid = text`, atau `Plan ENTERPRISE membatasi 1 bot` —
+> itu semua gejala database yang tidak sinkron / belum ter-seed. Deploy ulang dengan
+> versi ini dan startup script akan memperbaikinya otomatis.
+
+Password admin awal **hanya dicetak di log terminal deployment** (Railway → Console),
+tidak pernah ditampilkan di halaman web. Segera ganti lewat Dashboard → Settings.
+
 ## Menjalankan
 
 ```bash
@@ -73,7 +97,7 @@ Coba langsung: **/docs/playground** (request sungguhan ke backend).
 
 ## Environment
 
-Lihat `.env.example`. Variabel penting: `DATABASE_URL` (Railway PostgreSQL or Neon PostgreSQL), `APP_URL`, `AUTH_SECRET`, `AI_API_KEY` (opsional, server-side), `STORAGE_CONFIG` (folder default `./data`).
+Lihat `.env.example`. Variabel penting: `DATABASE_URL`, `APP_URL`, `AUTH_SECRET`, `AI_API_KEY` (opsional, server-side), `STORAGE_CONFIG` (folder default `./data`).
 
 ## Struktur
 
@@ -98,17 +122,3 @@ Platform ini untuk otomasi komunikasi yang sah. Koneksi WhatsApp berjalan melalu
 serta peraturan yang berlaku di wilayah Anda. Jangan gunakan untuk spam atau gangguan.
 
 © 2026 WATER AI CLOUD.
-
-
-## Neon PostgreSQL
-
-The application accepts a standard Neon pooled PostgreSQL URL through `DATABASE_URL`, including URLs with `sslmode=require&channel_binding=require`. The server detects Neon automatically and enables TLS plus node-postgres channel binding. It also contains a startup migration for older WATER AI CLOUD databases whose `public.users.id` is `BIGINT`/`INTEGER`: existing user IDs are mapped to UUIDs without deleting the user records, and dependent `user_id` columns are migrated before foreign keys are restored.
-
-**Important:** never put a real Neon password in source code, `.env.example`, or Git. Configure the full connection string only in Railway Variables.
-
-
-## Railway + Neon deployment fix
-
-This build keeps database initialization out of the Next.js build phase. `DATABASE_URL` is read at runtime, so Railway can build the Docker image without requiring the database secret as a Docker build argument. At runtime the app supports standard PostgreSQL/Neon URLs, including `sslmode=require` and `channel_binding=require`.
-
-The startup migration also handles legacy `public.users.id` values stored as BIGINT/INTEGER by mapping them to UUID and updating `user_id` foreign-key columns before the application creates its UUID-based tables.

@@ -1,7 +1,7 @@
 import { eq, or } from "drizzle-orm";
 import { z } from "zod";
 import { cookies } from "next/headers";
-import { db, pool, ensureDatabaseReady } from "@/db";
+import { db } from "@/db";
 import {
   users,
   subscriptions,
@@ -55,16 +55,7 @@ const resetSchema = z.object({
 
 const tokenSchema = z.object({ token: z.string().min(10) });
 
-function publicUser(u: {
-  id: string;
-  username: string;
-  email: string;
-  role: string;
-  plan: string;
-  suspended: boolean;
-  emailVerified: boolean;
-  createdAt: Date;
-}) {
+function publicUser(u: (typeof users.$inferSelect)) {
   return {
     id: u.id,
     username: u.username,
@@ -81,8 +72,6 @@ export async function POST(req: Request, ctx: Ctx) {
   const { action } = await ctx.params;
   const a = action?.[0] ?? "";
   try {
-    await ensureDatabaseReady();
-
     switch (a) {
       case "register":
         return await register(req);
@@ -101,8 +90,8 @@ export async function POST(req: Request, ctx: Ctx) {
     }
   } catch (e) {
     if (e instanceof ApiError) return jsonFail(e.code, e.message, e.status);
-    console.error(`[auth:${a}] CRITICAL ERROR:`, e instanceof Error ? e.stack || e.message : e);
-    return jsonFail("INTERNAL", `Terjadi kesalahan pada server: ${e instanceof Error ? e.message : String(e)}`, 500);
+    console.error(`[auth:${a}]`, e);
+    return jsonFail("INTERNAL", "Terjadi kesalahan pada server", 500);
   }
 }
 
@@ -117,51 +106,40 @@ async function register(req: Request) {
     throw new ApiError("VALIDATION", 400, parsed.error.issues[0].message);
   const { username, email, password } = parsed.data;
 
-  // Check existing email using robust pool query
-  const existingEmail = await pool.query(
-    `SELECT id FROM users WHERE email = $1 LIMIT 1`,
-    [email]
-  );
-  if (existingEmail.rows.length > 0)
+  const existing = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.email, email))
+    .limit(1);
+  if (existing.length)
     throw new ApiError("EMAIL_TAKEN", 409, "Email sudah terdaftar.");
-
-  // Check existing username using robust pool query
-  const existingUsername = await pool.query(
-    `SELECT id FROM users WHERE username = $1 LIMIT 1`,
-    [username]
-  );
-  if (existingUsername.rows.length > 0)
+  const existingUser = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.username, username))
+    .limit(1);
+  if (existingUser.length)
     throw new ApiError("USERNAME_TAKEN", 409, "Username sudah dipakai.");
 
-  const passwordHash = await hashPassword(password);
-  const insertRes = await pool.query(
-    `INSERT INTO users (username, email, password_hash, role, plan, suspended, email_verified)
-     VALUES ($1, $2, $3, 'USER', 'FREE', FALSE, FALSE)
-     RETURNING id, username, email, role, plan, suspended, email_verified, created_at`,
-    [username, email, passwordHash]
-  );
-  const userRow = insertRes.rows[0];
-  const user = {
-    id: userRow.id,
-    username: userRow.username,
-    email: userRow.email,
-    role: userRow.role,
-    plan: userRow.plan,
-    suspended: userRow.suspended,
-    emailVerified: userRow.email_verified,
-    createdAt: userRow.created_at,
-  };
+  const [user] = await db
+    .insert(users)
+    .values({
+      username,
+      email,
+      passwordHash: await hashPassword(password),
+    })
+    .returning();
+  await db.insert(subscriptions).values({ userId: user.id, plan: "FREE" });
 
-  await pool.query(
-    `INSERT INTO subscriptions (user_id, plan, status) VALUES ($1, 'FREE', 'active')`,
-    [user.id]
-  );
-
+  // Email verification: token generated server-side. This environment has no
+  // SMTP configured, so the link is returned here (shown in the UI). In
+  // production wire this to your email provider.
   const verifyToken = newToken(24);
-  await pool.query(
-    `INSERT INTO email_verifications (user_id, token, expires_at) VALUES ($1, $2, $3)`,
-    [user.id, verifyToken, new Date(Date.now() + 24 * 3600e3)]
-  );
+  await db.insert(emailVerifications).values({
+    userId: user.id,
+    token: verifyToken,
+    expiresAt: new Date(Date.now() + 24 * 3600e3),
+  });
   const verifyLink = `${APP_URL}/verify?token=${verifyToken}`;
 
   await createSession(user.id, req.headers.get("user-agent") ?? undefined, ip);
@@ -191,34 +169,21 @@ async function login(req: Request) {
     throw new ApiError("VALIDATION", 400, parsed.error.issues[0].message);
   const { identifier, password } = parsed.data;
 
-  const rows = await pool.query(
-    `SELECT id, username, email, password_hash, role, plan, suspended, email_verified, created_at
-     FROM users WHERE email = $1 OR username = $1 LIMIT 1`,
-    [identifier]
-  );
-  const userRow = rows.rows[0];
-  if (!userRow)
+  const rows = await db
+    .select()
+    .from(users)
+    .where(or(eq(users.email, identifier), eq(users.username, identifier)))
+    .limit(5);
+  const user = rows[0];
+  if (!user)
     throw new ApiError("INVALID_CREDENTIALS", 401, "Email/username atau password salah.");
-
-  const user = {
-    id: userRow.id,
-    username: userRow.username,
-    email: userRow.email,
-    passwordHash: userRow.password_hash,
-    role: userRow.role,
-    plan: userRow.plan,
-    suspended: userRow.suspended,
-    emailVerified: userRow.email_verified,
-    createdAt: userRow.created_at,
-  };
-
   const okPw = await verifyPassword(password, user.passwordHash);
   if (!okPw)
     throw new ApiError("INVALID_CREDENTIALS", 401, "Email/username atau password salah.");
   if (user.suspended)
     throw new ApiError("SUSPENDED", 403, "Akun ditangguhkan. Hubungi support.");
 
-  await pool.query(`UPDATE users SET last_login_at = NOW() WHERE id = $1`, [user.id]);
+  await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
   await createSession(user.id, req.headers.get("user-agent") ?? undefined, ip);
   await addLog({
     userId: user.id,
@@ -274,6 +239,7 @@ async function forgot(req: Request) {
       message: "Link reset password dibuat",
     });
   }
+  // Response intentionally does not reveal whether the email exists.
   return Response.json({
     success: true,
     data: {

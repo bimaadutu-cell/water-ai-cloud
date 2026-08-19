@@ -245,12 +245,12 @@ export function EmptyState({
 
 export function ErrorState({ message, onRetry }: { message: string; onRetry?: () => void }) {
   return (
-    <div className="flex flex-col items-center justify-center rounded-2xl border border-red-500/20 bg-red-500/5 px-6 py-12 text-center">
-      <Icon name="alert" size={28} className="mb-3 text-red-400" />
-      <p className="text-sm font-medium text-red-200">Something went wrong</p>
-      <p className="mt-1 text-xs text-red-300/70">{message}</p>
+    <div className="flex flex-col items-center justify-center rounded-2xl border border-red-500/40 bg-red-500/10 px-6 py-12 text-center">
+      <Icon name="alert" size={30} className="mb-3 text-red-300" />
+      <p className="text-base font-bold text-red-200">Something went wrong</p>
+      <p className="mt-1.5 max-w-md break-words text-sm text-red-200/90">{message}</p>
       {onRetry && (
-        <button onClick={onRetry} className="btn btn-ghost mt-4 !py-1.5 !text-xs">
+        <button onClick={onRetry} className="btn btn-primary mt-5 !py-2 !text-xs">
           Coba lagi
         </button>
       )}

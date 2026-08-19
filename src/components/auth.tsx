@@ -16,20 +16,21 @@ export function AuthShell({
   children: React.ReactNode;
 }) {
   return (
-    <div className="grid-bg relative flex min-h-screen items-center justify-center px-4 py-10">
-      <div className="pointer-events-none absolute -top-32 left-1/2 h-[380px] w-[680px] -translate-x-1/2 rounded-full bg-cyan-500/10 blur-[110px]" aria-hidden />
+    <div className="auth-scope relative flex min-h-screen items-center justify-center bg-gradient-to-b from-[#0c141f] via-[#0a111b] to-[#070d15] px-4 py-10">
+      <div className="grid-bg-bright pointer-events-none absolute inset-x-0 top-0 h-[520px]" aria-hidden />
+      <div className="pointer-events-none absolute -top-40 left-1/2 h-[420px] w-[720px] -translate-x-1/2 rounded-full bg-cyan-500/20 blur-[120px]" aria-hidden />
       <div className="w-full max-w-md">
         <div className="mb-8 flex justify-center">
-          <Link href="/">
-            <Logo size={34} />
+          <Link href="/" className="drop-shadow-[0_0_18px_rgba(34,211,238,0.35)]">
+            <Logo size={36} />
           </Link>
         </div>
-        <div className="glass anim-fade-up rounded-2xl p-6 shadow-2xl shadow-cyan-500/5 sm:p-8">
-          <h1 className="font-display text-xl font-bold text-white">{title}</h1>
-          <p className="mt-1 text-xs text-slate-500">{subtitle}</p>
+        <div className="auth-card anim-fade-up rounded-2xl p-6 sm:p-8">
+          <h1 className="font-display text-2xl font-bold text-white">{title}</h1>
+          <p className="mt-1.5 text-sm text-slate-300">{subtitle}</p>
           <div className="mt-6">{children}</div>
         </div>
-        <p className="mt-6 text-center text-[11px] text-slate-600">
+        <p className="mt-6 text-center text-xs text-slate-400">
           © 2026 WATER AI CLOUD. All rights reserved.
         </p>
       </div>
@@ -40,8 +41,8 @@ export function AuthShell({
 function Err({ msg }: { msg: string | null }) {
   if (!msg) return null;
   return (
-    <div className="mb-4 flex items-start gap-2 rounded-lg border border-red-500/25 bg-red-500/10 px-3 py-2.5 text-xs text-red-300">
-      <Icon name="alert" size={14} className="mt-0.5 shrink-0" />
+    <div className="mb-4 flex items-start gap-2 rounded-lg border border-red-500/40 bg-red-500/20 px-3.5 py-3 text-[13px] font-medium leading-relaxed text-red-200">
+      <Icon name="alert" size={15} className="mt-0.5 shrink-0 text-red-300" />
       {msg}
     </div>
   );
