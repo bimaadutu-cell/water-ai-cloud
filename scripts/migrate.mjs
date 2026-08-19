@@ -51,9 +51,9 @@ try {
 
 // 2) Schema push — brings DB in sync with src/db/schema.ts
 console.log("[migrate] Running drizzle-kit push...");
-const push = spawnSync("npx", ["drizzle-kit", "push", "--force"], {
+const push = spawnSync("node", ["./node_modules/drizzle-kit/bin.cjs", "push", "--force"], {
   stdio: "inherit",
-  env: process.env,
+  env: { ...process.env, HOME: "/tmp" },
   timeout: 180000,
 });
 if (push.status === 0) {
