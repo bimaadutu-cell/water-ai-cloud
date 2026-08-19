@@ -21,6 +21,7 @@ const databaseUrl = rawDatabaseUrl;
 const globalForDb = globalThis as typeof globalThis & {
   __arenaNextJsPostgresqlPool?: Pool;
   __initializedDb?: boolean;
+  __databaseReady?: Promise<void>;
 };
 
 export const pool =
@@ -38,7 +39,17 @@ export const db = drizzle(pool);
 
 async function ensureInitialized() {
   if (globalForDb.__initializedDb) return;
+
+  // Fail loudly when DATABASE_URL is missing instead of silently connecting
+  // to the local placeholder database. This makes Railway configuration
+  // errors immediately visible in the server logs.
+  if (!process.env.DATABASE_URL) {
+    throw new Error("DATABASE_URL belum diset. Tambahkan DATABASE_URL pada Railway Variables.");
+  }
+
   try {
+    await pool.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto;`);
+
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -129,34 +140,52 @@ async function ensureInitialized() {
       );
 
       CREATE TABLE IF NOT EXISTS system_settings (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        key VARCHAR(64) NOT NULL UNIQUE,
-        value JSONB NOT NULL,
+        key VARCHAR(64) PRIMARY KEY,
+        value JSONB NOT NULL DEFAULT '{}'::jsonb,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
 
       CREATE TABLE IF NOT EXISTS logs (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-        bot_id UUID REFERENCES bots(id) ON DELETE CASCADE,
+        user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+        bot_id UUID REFERENCES bots(id) ON DELETE SET NULL,
         level VARCHAR(16) NOT NULL DEFAULT 'info',
         event VARCHAR(64) NOT NULL,
+        status VARCHAR(20),
         message TEXT NOT NULL,
+        request_id VARCHAR(48),
         meta JSONB NOT NULL DEFAULT '{}'::jsonb,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
 
       CREATE TABLE IF NOT EXISTS subscriptions (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        user_id UUID NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
         plan VARCHAR(20) NOT NULL DEFAULT 'FREE',
         status VARCHAR(20) NOT NULL DEFAULT 'active',
+        started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         expires_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
 
-    const adminCheck = await pool.query("SELECT id FROM users WHERE username = 'admin' LIMIT 1");
+    // Repair older installations created by the previous bootstrap.
+    await pool.query(`
+      ALTER TABLE system_settings
+        DROP CONSTRAINT IF EXISTS system_settings_key_key;
+      CREATE UNIQUE INDEX IF NOT EXISTS system_settings_key_unique
+        ON system_settings(key);
+
+      ALTER TABLE logs ADD COLUMN IF NOT EXISTS status VARCHAR(20);
+      ALTER TABLE logs ADD COLUMN IF NOT EXISTS request_id VARCHAR(48);
+
+      ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    `);
+
+    const adminCheck = await pool.query(
+      "SELECT id FROM users WHERE username = 'admin' LIMIT 1"
+    );
+
     if (adminCheck.rows.length === 0) {
       const initialPw = process.env.ADMIN_INITIAL_PASSWORD || "Water@2026";
       const hashed = await hashPassword(initialPw);
@@ -166,19 +195,42 @@ async function ensureInitialized() {
          RETURNING id`,
         [hashed]
       );
+
       if (userRes.rows.length > 0) {
-        const userId = userRes.rows[0].id;
         await pool.query(
-          `INSERT INTO subscriptions (user_id, plan, status) VALUES ($1, 'ENTERPRISE', 'active')`,
-          [userId]
+          `INSERT INTO subscriptions (user_id, plan, status)
+           VALUES ($1, 'ENTERPRISE', 'active')`,
+          [userRes.rows[0].id]
         );
       }
     }
+
     globalForDb.__initializedDb = true;
   } catch (e) {
     console.error("CRITICAL DATABASE INITIALIZATION ERROR:", e);
+    throw e;
   }
 }
 
-// Jalankan inisialisasi segera saat modul dimuat agar tabel siap
-ensureInitialized().catch((e) => console.error("Failed to run init:", e));
+/**
+ * Every database-dependent request should await this before using Drizzle.
+ * The previous version started initialization in the background, so the
+ * first login request could query `users` before the table existed and
+ * return the generic "Terjadi kesalahan pada server".
+ */
+export function ensureDatabaseReady(): Promise<void> {
+  if (globalForDb.__initializedDb) return Promise.resolve();
+  if (!globalForDb.__databaseReady) {
+    globalForDb.__databaseReady = ensureInitialized().catch((error) => {
+      // Allow a later request/redeploy to retry after a transient DB failure.
+      globalForDb.__databaseReady = undefined;
+      throw error;
+    });
+  }
+  return globalForDb.__databaseReady;
+}
+
+// Start initialization early, but request handlers still await the same
+// promise through ensureDatabaseReady(), eliminating the startup race.
+ensureDatabaseReady().catch(() => {});
+

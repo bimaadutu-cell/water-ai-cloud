@@ -1,7 +1,7 @@
 import { eq, or } from "drizzle-orm";
 import { z } from "zod";
 import { cookies } from "next/headers";
-import { db } from "@/db";
+import { db, ensureDatabaseReady } from "@/db";
 import {
   users,
   subscriptions,
@@ -72,6 +72,10 @@ export async function POST(req: Request, ctx: Ctx) {
   const { action } = await ctx.params;
   const a = action?.[0] ?? "";
   try {
+    // Railway can receive the first request immediately after the container
+    // starts. Wait for PostgreSQL bootstrap before touching users/sessions.
+    await ensureDatabaseReady();
+
     switch (a) {
       case "register":
         return await register(req);

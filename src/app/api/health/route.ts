@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { db } from "@/db";
+import { db, ensureDatabaseReady } from "@/db";
 import { engineRunningCount } from "@/server/engine";
 
 export const runtime = "nodejs";
@@ -8,6 +8,7 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   let database: "ok" | "error" = "ok";
   try {
+    await ensureDatabaseReady();
     await db.execute(sql`select 1`);
   } catch {
     database = "error";
