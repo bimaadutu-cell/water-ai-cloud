@@ -454,14 +454,13 @@ async function ensureInitialized() {
       ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active';
     `);
 
-    const initialPw = process.env.ADMIN_INITIAL_PASSWORD || "Water@2026";
-    const hashed = await hashPassword(initialPw);
-
     const adminCheck = await pool.query(
       "SELECT id FROM users WHERE username = 'admin' LIMIT 1"
     );
 
     if (adminCheck.rows.length === 0) {
+      const initialPw = process.env.ADMIN_INITIAL_PASSWORD || "Water@2026";
+      const hashed = await hashPassword(initialPw);
       const userRes = await pool.query(
         `INSERT INTO users (username, email, password_hash, role, plan, email_verified)
          VALUES ('admin', 'admin@wateraicloud.dev', $1, 'ADMIN', 'ENTERPRISE', TRUE)
@@ -472,17 +471,10 @@ async function ensureInitialized() {
       if (userRes.rows.length > 0) {
         await pool.query(
           `INSERT INTO subscriptions (user_id, plan, status)
-           VALUES ($1, 'ENTERPRISE', 'active')
-           ON CONFLICT (user_id) DO UPDATE SET plan = 'ENTERPRISE', status = 'active'`,
+           VALUES ($1, 'ENTERPRISE', 'active')`,
           [userRes.rows[0].id]
         );
       }
-    } else {
-      // Force update admin password and ensure role/plan are correct so login always succeeds with ADMIN_INITIAL_PASSWORD
-      await pool.query(
-        `UPDATE users SET password_hash = $1, role = 'ADMIN', plan = 'ENTERPRISE', email_verified = TRUE WHERE username = 'admin'`,
-        [hashed]
-      );
     }
 
     globalForDb.__initializedDb = true;
