@@ -42,10 +42,9 @@ console.log("[migrate] Connected. Cleaning legacy schema drift...");
 //    types left over from earlier code versions. drizzle-kit push cannot
 //    reconcile those, so we drop/fix them explicitly first.
 try {
-  await client.query(`ALTER TABLE users DROP COLUMN IF EXISTS password`);
+  await client.query(`ALTER TABLE users DROP COLUMN IF EXISTS password CASCADE`);
   console.log("[migrate] users.password (legacy) ensured dropped");
 } catch (e) {
-  // users table may not exist yet on a fresh DB — that is fine
   console.log("[migrate] legacy cleanup skipped:", e.message?.split("\n")[0]);
 }
 

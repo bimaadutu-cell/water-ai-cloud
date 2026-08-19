@@ -411,10 +411,13 @@ async function overview(user: User) {
     db.select().from(logs).where(eq(logs.userId, user.id)).orderBy(desc(logs.createdAt)).limit(8),
   ]);
   const botRows = await db.select().from(bots).where(eq(bots.userId, user.id));
-  const waRows = await db
-    .select()
-    .from(whatsappSessions)
-    .where(inArray(whatsappSessions.botId, botRows.map((b) => b.id)));
+  const botIds = botRows.map((b) => b.id);
+  const waRows = botIds.length > 0
+    ? await db
+        .select()
+        .from(whatsappSessions)
+        .where(inArray(whatsappSessions.botId, botIds))
+    : [];
   const statusDist: Record<string, number> = { online: 0, offline: 0, other: 0 };
   for (const b of botRows) statusDist[b.status === "online" ? "online" : b.status === "offline" ? "offline" : "other"]++;
   const cnt = (r: { n: number }[] | undefined) => r?.[0]?.n ?? 0;
