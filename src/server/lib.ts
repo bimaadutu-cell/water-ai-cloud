@@ -206,7 +206,8 @@ export async function checkOrigin(req: Request) {
     const h = await headers();
     const host = h.get("host") || "";
     const appHost = new URL(APP_URL).host;
-    if (o.host !== host && o.host !== appHost) {
+    // Relaxed check for cloud hosting
+    if (o.host !== host && o.host !== appHost && !host.includes("railway.app") && !o.host.includes("railway.app")) {
       throw new ApiError("ORIGIN_MISMATCH", 403, "Origin tidak dikenali.");
     }
   } catch (e) {
