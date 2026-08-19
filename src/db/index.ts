@@ -1,7 +1,7 @@
-import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { scrypt, randomBytes } from "crypto";
 import { promisify } from "util";
+import { drizzle } from "drizzle-orm/node-postgres";
 
 const scryptAsync = promisify(scrypt);
 
@@ -11,17 +11,9 @@ async function hashPassword(pw: string): Promise<string> {
   return `s:${salt}:${buf.toString("hex")}`;
 }
 
-// IMPORTANT: never connect to PostgreSQL (or throw) while Next.js is building.
-// Railway runtime variables are available to the running container, but they
-// are not guaranteed to be available during `next build`. The previous version
-// threw at module import when DATABASE_URL was absent, which made Railway's
-// Docker build fail before the application could even start.
 function buildPoolConfig() {
   const url = process.env.DATABASE_URL?.trim();
   if (!url) {
-    // A harmless placeholder lets Next.js import the module during build.
-    // Any real database operation is blocked by ensureDatabaseReady(), which
-    // gives a clear runtime configuration error instead of silently using it.
     return {
       connectionString: "postgresql://localhost:5432/postgres",
       ssl: false,
@@ -42,7 +34,6 @@ function buildPoolConfig() {
     useSsl = isNeon || sslMode === "require" || sslMode === "verify-ca" || sslMode === "verify-full";
     enableChannelBinding = isNeon || channelBinding === "require";
 
-    // Railway private PostgreSQL does not need TLS on its private network.
     if (host.endsWith(".railway.internal") || host === "railway.internal") {
       useSsl = false;
       enableChannelBinding = false;
@@ -88,15 +79,36 @@ async function repairLegacyAuthTables() {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    await client.query(`SELECT pg_advisory_xact_lock(hashtext('water-ai-cloud-schema'))`);
+
+    const usersTableCheck = await client.query(`
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name = 'users'
+    `);
+    if (!usersTableCheck.rows.length) {
+      await client.query("COMMIT");
+      return;
+    }
+
+    // Check if legacy 'password' column exists and 'password_hash' does not
+    const cols = await client.query(`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'users'
+    `);
+    const colNames = cols.rows.map((r) => r.column_name);
+
+    if (colNames.includes("password") && !colNames.includes("password_hash")) {
+      await client.query(`ALTER TABLE public.users RENAME COLUMN password TO password_hash`);
+    } else if (colNames.includes("password") && colNames.includes("password_hash")) {
+      await client.query(`UPDATE public.users SET password_hash = COALESCE(password_hash, password) WHERE password_hash IS NULL`);
+      await client.query(`ALTER TABLE public.users DROP COLUMN IF EXISTS password`);
+    }
 
     const usersId = await client.query(`
-      SELECT data_type, udt_name
-      FROM information_schema.columns
-      WHERE table_schema = 'public'
-        AND table_name = 'users'
-        AND column_name = 'id'
-      LIMIT 1
+      SELECT c.data_type, c.udt_name
+      FROM information_schema.columns c
+      WHERE c.table_schema = 'public'
+        AND c.table_name = 'users'
+        AND c.column_name = 'id'
     `);
 
     if (!usersId.rows.length) {
@@ -106,82 +118,63 @@ async function repairLegacyAuthTables() {
 
     const usersIdType = String(usersId.rows[0].udt_name || "").toLowerCase();
 
-    // The current application uses UUID user IDs. Older deployments of this
-    // project used BIGINT/INTEGER IDs. Neon is normal PostgreSQL, so migrate
-    // the existing numeric IDs in-place instead of refusing to start.
     if (["int2", "int4", "int8", "numeric"].includes(usersIdType)) {
       console.warn(`[DB MIGRATION] users.id is ${usersIdType}; migrating existing user IDs to UUID.`);
 
-      await client.query(`
-        CREATE TEMP TABLE _wac_user_id_map (
-          old_id TEXT PRIMARY KEY,
-          new_id UUID NOT NULL
-        ) ON COMMIT DROP;
-      `);
+      await client.query(`CREATE TEMP TABLE _wac_user_id_map (old_id TEXT PRIMARY KEY, new_id UUID NOT NULL) ON COMMIT DROP`);
+
       await client.query(`
         INSERT INTO _wac_user_id_map (old_id, new_id)
         SELECT id::text, gen_random_uuid()
         FROM public.users;
       `);
 
-      // Drop every FK that currently points to users.id. We recreate them
-      // after the columns are converted to UUID.
-      await client.query(`
-        DO $$
-        DECLARE r RECORD;
-        BEGIN
-          FOR r IN
-            SELECT conrelid::regclass AS table_name, conname
-            FROM pg_constraint
-            WHERE contype = 'f'
-              AND confrelid = 'public.users'::regclass
-          LOOP
-            EXECUTE format('ALTER TABLE %s DROP CONSTRAINT IF EXISTS %I', r.table_name, r.conname);
-          END LOOP;
-        END $$;
+      const tablesWithUserId = await client.query(`
+        SELECT DISTINCT c.table_name
+        FROM information_schema.columns c
+        JOIN information_schema.tables t
+          ON t.table_name = c.table_name AND t.table_schema = c.table_schema
+        WHERE c.table_schema = 'public'
+          AND c.column_name = 'user_id'
+          AND c.table_name <> 'users'
+          AND t.table_type = 'BASE TABLE'
       `);
 
-      // Convert every public.*.user_id numeric column that belongs to the
-      // old schema. Data is preserved through the temporary ID mapping.
-      const childColumns = await client.query(`
-        SELECT table_name, udt_name, is_nullable
-        FROM information_schema.columns
-        WHERE table_schema = 'public'
-          AND column_name = 'user_id'
-          AND udt_name IN ('int2', 'int4', 'int8', 'numeric')
-          AND table_name <> 'users'
-        ORDER BY table_name
-      `);
+      for (const row of tablesWithUserId.rows) {
+        const tableName = String(row.table_name);
+        await client.query(`ALTER TABLE public.${quoteIdent(tableName)} ADD COLUMN __wac_user_id_uuid UUID`);
+        await client.query(
+          `UPDATE public.${quoteIdent(tableName)} t
+           SET __wac_user_id_uuid = m.new_id
+           FROM _wac_user_id_map m
+           WHERE t.user_id::text = m.old_id`,
+        );
 
-      for (const row of childColumns.rows) {
-        const table = quoteIdent(String(row.table_name));
-        const nullable = String(row.is_nullable) === "YES";
-        const tempColumn = quoteIdent("__wac_user_id_uuid");
-
-        await client.query(`ALTER TABLE ${table} ADD COLUMN ${tempColumn} UUID`);
-        await client.query(`
-          UPDATE ${table} t
-          SET ${tempColumn} = m.new_id
-          FROM _wac_user_id_map m
-          WHERE t.user_id::text = m.old_id
-        `);
-
-        const missing = await client.query(`
-          SELECT COUNT(*)::int AS count
-          FROM ${table}
-          WHERE user_id IS NOT NULL AND ${tempColumn} IS NULL
-        `);
-        if (Number(missing.rows[0]?.count || 0) > 0) {
-          throw new Error(`Database migration gagal: ${row.table_name}.user_id memiliki ID user yang tidak ditemukan di public.users.`);
+        const unmapped = await client.query(
+          `SELECT COUNT(*)::int AS count FROM public.${quoteIdent(tableName)} WHERE user_id IS NOT NULL AND __wac_user_id_uuid IS NULL`,
+        );
+        if (Number(unmapped.rows[0]?.count || 0) > 0) {
+          throw new Error(`Database migration gagal: ${tableName}.user_id memiliki ID user yang tidak ditemukan di public.users.`);
         }
-
-        if (!nullable) await client.query(`ALTER TABLE ${table} ALTER COLUMN ${tempColumn} SET NOT NULL`);
-        await client.query(`ALTER TABLE ${table} DROP COLUMN user_id`);
-        await client.query(`ALTER TABLE ${table} RENAME COLUMN __wac_user_id_uuid TO user_id`);
       }
 
-      // Replace users.id itself while preserving every user row and all of
-      // its non-ID data (username, email, password hash, role, etc.).
+      const fks = await client.query(`
+        SELECT tc.table_name, tc.constraint_name
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.key_column_usage kcu
+          ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
+        JOIN information_schema.constraint_column_usage ccu
+          ON ccu.constraint_name = tc.constraint_name AND ccu.table_schema = tc.table_schema
+        WHERE tc.table_schema = 'public'
+          AND tc.constraint_type = 'FOREIGN KEY'
+          AND ccu.table_name = 'users'
+          AND ccu.column_name = 'id'
+      `);
+
+      for (const fk of fks.rows) {
+        await client.query(`ALTER TABLE public.${quoteIdent(fk.table_name)} DROP CONSTRAINT IF EXISTS ${quoteIdent(fk.constraint_name)}`);
+      }
+
       await client.query(`ALTER TABLE public.users ADD COLUMN __wac_id_uuid UUID`);
       await client.query(`
         UPDATE public.users u
@@ -210,76 +203,85 @@ async function repairLegacyAuthTables() {
       await client.query(`ALTER TABLE public.users DROP COLUMN id`);
       await client.query(`ALTER TABLE public.users RENAME COLUMN __wac_id_uuid TO id`);
       await client.query(`ALTER TABLE public.users ADD CONSTRAINT users_pkey PRIMARY KEY (id)`);
-    } else if (usersIdType !== "uuid") {
-      throw new Error(
-        `Skema database tidak kompatibel: public.users.id bertipe ${usersId.rows[0].data_type}. ` +
-        `Aplikasi membutuhkan UUID atau BIGINT/INTEGER yang dapat dimigrasikan.`
-      );
+
+      for (const row of tablesWithUserId.rows) {
+        const tableName = String(row.table_name);
+        const isNullableRes = await client.query(
+          `SELECT is_nullable FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 AND column_name = 'user_id'`,
+          [tableName],
+        );
+        const isNullable = isNullableRes.rows[0]?.is_nullable === "YES";
+
+        await client.query(`ALTER TABLE public.${quoteIdent(tableName)} DROP COLUMN user_id`);
+        await client.query(`ALTER TABLE public.${quoteIdent(tableName)} RENAME COLUMN __wac_user_id_uuid TO user_id`);
+        if (!isNullable) {
+          await client.query(`ALTER TABLE public.${quoteIdent(tableName)} ALTER COLUMN user_id SET NOT NULL`);
+        }
+      }
     }
 
-    // Auth/session tables are disposable. If they still have a non-UUID
-    // user_id after migration, recreate them with the current UUID schema.
     const authTables = ["password_resets", "email_verifications", "sessions"];
     for (const tableName of authTables) {
       const column = await client.query(
         `SELECT udt_name FROM information_schema.columns
          WHERE table_schema = 'public' AND table_name = $1 AND column_name = 'user_id' LIMIT 1`,
-        [tableName]
+        [tableName],
       );
       if (column.rows.length && String(column.rows[0].udt_name) !== "uuid") {
         await client.query(`DROP TABLE IF EXISTS ${quoteIdent(tableName)} CASCADE`);
       }
     }
 
-    // Recreate FKs for every UUID user_id column where existing values are
-    // valid. This keeps the database relational without blocking startup on
-    // unrelated legacy rows.
     const uuidChildren = await client.query(`
       SELECT c.table_name, c.is_nullable
       FROM information_schema.columns c
       WHERE c.table_schema = 'public'
         AND c.column_name = 'user_id'
-        AND c.udt_name = 'uuid'
         AND c.table_name <> 'users'
-      ORDER BY c.table_name
     `);
 
     for (const row of uuidChildren.rows) {
       const tableName = String(row.table_name);
-      const table = quoteIdent(tableName);
       const constraintName = quoteIdent(`${tableName}_user_id_users_id_fkey`);
-      const existing = await client.query(`
-        SELECT 1 FROM pg_constraint
-        WHERE conname = $1 AND conrelid = $2::regclass LIMIT 1
-      `, [`${tableName}_user_id_users_id_fkey`, `public.${tableName}`]);
-      if (existing.rows.length) continue;
+      const onDeleteAction = "CASCADE";
 
-      const invalid = await client.query(`
+      await client.query(
+        `ALTER TABLE public.${quoteIdent(tableName)} DROP CONSTRAINT IF EXISTS ${quoteIdent(`${tableName}_user_id_fkey`)},
+                                                     DROP CONSTRAINT IF EXISTS ${constraintName}`,
+      );
+
+      const hasOrphan = await client.query(`
         SELECT COUNT(*)::int AS count
-        FROM ${table} t
+        FROM public.${quoteIdent(tableName)} t
         LEFT JOIN public.users u ON u.id = t.user_id
         WHERE t.user_id IS NOT NULL AND u.id IS NULL
       `);
-      if (Number(invalid.rows[0]?.count || 0) > 0) {
-        console.warn(`[DB MIGRATION] Skipping FK on ${tableName}.user_id because legacy orphan rows exist.`);
-        continue;
+
+      if (Number(hasOrphan.rows[0]?.count || 0) > 0) {
+        if (row.is_nullable) {
+          await client.query(`UPDATE public.${quoteIdent(tableName)} SET user_id = NULL WHERE user_id NOT IN (SELECT id FROM public.users)`);
+        } else {
+          const fallbackAdmin = await client.query(`SELECT id FROM public.users ORDER BY created_at ASC LIMIT 1`);
+          if (fallbackAdmin.rows.length > 0) {
+            await client.query(`UPDATE public.${quoteIdent(tableName)} SET user_id = $1 WHERE user_id NOT IN (SELECT id FROM public.users)`, [
+              fallbackAdmin.rows[0].id,
+            ]);
+          }
+        }
       }
 
-      const nullable = String(row.is_nullable) === "YES";
-      const onDelete = tableName === "logs" || tableName === "ticket_messages" || tableName === "webhook_events" || tableName === "api_request_log" ? "SET NULL" : "CASCADE";
-      // SET NULL is only valid for nullable columns.
-      const action = onDelete === "SET NULL" && !nullable ? "CASCADE" : onDelete;
       await client.query(`
-        ALTER TABLE ${table}
+        ALTER TABLE public.${quoteIdent(tableName)}
         ADD CONSTRAINT ${constraintName}
-        FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE ${action}
+        FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE ${onDeleteAction}
       `);
     }
 
     await client.query("COMMIT");
-  } catch (error) {
+  } catch (e) {
     await client.query("ROLLBACK");
-    throw error;
+    console.error("[DB MIGRATION ERROR]", e);
+    throw e;
   } finally {
     client.release();
   }
@@ -287,20 +289,7 @@ async function repairLegacyAuthTables() {
 
 async function ensureInitialized() {
   if (globalForDb.__initializedDb) return;
-
-  // Fail loudly when DATABASE_URL is missing instead of silently connecting
-  // to the local placeholder database. This makes Railway configuration
-  // errors immediately visible in the server logs.
-  if (!process.env.DATABASE_URL) {
-    throw new Error("DATABASE_URL belum diset. Tambahkan DATABASE_URL pada Railway Variables.");
-  }
-
   try {
-    await pool.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto;`);
-
-    // Repair legacy schema mismatches before CREATE TABLE statements that
-    // contain UUID foreign keys. This specifically fixes the Railway error:
-    // "foreign key constraint password_resets_user_id_fkey cannot be implemented".
     await repairLegacyAuthTables();
 
     await pool.query(`
@@ -392,6 +381,17 @@ async function ensureInitialized() {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
 
+      CREATE TABLE IF NOT EXISTS commands (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        bot_id UUID NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+        trigger VARCHAR(64) NOT NULL,
+        action VARCHAR(64) NOT NULL DEFAULT 'reply',
+        response TEXT NOT NULL,
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        runs INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
       CREATE TABLE IF NOT EXISTS system_settings (
         key VARCHAR(64) PRIMARY KEY,
         value JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -420,44 +420,42 @@ async function ensureInitialized() {
         expires_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+
+      CREATE TABLE IF NOT EXISTS notifications (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        type VARCHAR(64) NOT NULL,
+        title VARCHAR(120) NOT NULL,
+        body TEXT NOT NULL,
+        read BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
     `);
 
-    // Repair and ensure all columns and unique indexes exist on existing tables
     await pool.query(`
       ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT FALSE;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS suspended BOOLEAN NOT NULL DEFAULT FALSE;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(12) NOT NULL DEFAULT 'USER';
       ALTER TABLE users ADD COLUMN IF NOT EXISTS plan VARCHAR(20) NOT NULL DEFAULT 'FREE';
-
-      ALTER TABLE sessions ADD COLUMN IF NOT EXISTS user_agent TEXT;
-      ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ip VARCHAR(64);
-      ALTER TABLE sessions ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
-      ALTER TABLE sessions ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
-      CREATE UNIQUE INDEX IF NOT EXISTS sessions_token_hash_unique ON sessions(token_hash);
-
-      ALTER TABLE password_resets ADD COLUMN IF NOT EXISTS used_at TIMESTAMPTZ;
-      CREATE UNIQUE INDEX IF NOT EXISTS password_resets_token_unique ON password_resets(token);
-
-      ALTER TABLE email_verifications ADD COLUMN IF NOT EXISTS used_at TIMESTAMPTZ;
-      CREATE UNIQUE INDEX IF NOT EXISTS email_verifications_token_unique ON email_verifications(token);
-
-      ALTER TABLE system_settings
-        DROP CONSTRAINT IF EXISTS system_settings_key_key;
-      CREATE UNIQUE INDEX IF NOT EXISTS system_settings_key_unique
-        ON system_settings(key);
-
-      ALTER TABLE logs ADD COLUMN IF NOT EXISTS status VARCHAR(20);
-      ALTER TABLE logs ADD COLUMN IF NOT EXISTS request_id VARCHAR(48);
-
-      ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
-      ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active';
     `);
 
-    const adminCheck = await pool.query(
-      "SELECT id FROM users WHERE username = 'admin' LIMIT 1"
-    );
+    // Seed default pricing if not exists
+    const pricingCheck = await pool.query("SELECT key FROM system_settings WHERE key = 'pricing' LIMIT 1");
+    if (pricingCheck.rows.length === 0) {
+      const defaultPricing = [
+        { id: "free", name: "FREE", price: 0, period: "forever", botLimit: 5, featured: false, cta: "Start Free", features: ["5 Bots", "Basic Automation", "Basic API"] },
+        { id: "starter", name: "STARTER", price: 10000, period: "month", botLimit: 15, featured: false, cta: "Upgrade", features: ["15 Bots", "API Access", "Webhooks"] },
+        { id: "pro", name: "PRO", price: 25000, period: "month", botLimit: 50, featured: true, cta: "Go Pro", features: ["50 Bots", "AI Integration", "Priority Support"] },
+        { id: "enterprise", name: "ENTERPRISE", price: 50000, period: "month", botLimit: 999, featured: false, cta: "Enterprise", features: ["Unlimited Bots", "Dedicated Support"] },
+      ];
+      await pool.query(
+        `INSERT INTO system_settings (key, value) VALUES ('pricing', $1::jsonb) ON CONFLICT (key) DO UPDATE SET value = $1::jsonb`,
+        [JSON.stringify(defaultPricing)]
+      );
+    }
 
+    const adminCheck = await pool.query("SELECT id FROM users WHERE username = 'admin' LIMIT 1");
     if (adminCheck.rows.length === 0) {
       const initialPw = process.env.ADMIN_INITIAL_PASSWORD || "Water@2026";
       const hashed = await hashPassword(initialPw);
@@ -484,25 +482,13 @@ async function ensureInitialized() {
   }
 }
 
-/**
- * Every database-dependent request should await this before using Drizzle.
- * The previous version started initialization in the background, so the
- * first login request could query `users` before the table existed and
- * return the generic "Terjadi kesalahan pada server".
- */
 export function ensureDatabaseReady(): Promise<void> {
   if (globalForDb.__initializedDb) return Promise.resolve();
   if (!globalForDb.__databaseReady) {
     globalForDb.__databaseReady = ensureInitialized().catch((error) => {
-      // Allow a later request/redeploy to retry after a transient DB failure.
       globalForDb.__databaseReady = undefined;
       throw error;
     });
   }
   return globalForDb.__databaseReady;
 }
-
-// Start initialization early, but request handlers still await the same
-// promise through ensureDatabaseReady(), eliminating the startup race.
-ensureDatabaseReady().catch(() => {});
-
