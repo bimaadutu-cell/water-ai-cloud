@@ -11,12 +11,34 @@ async function hashPassword(pw: string): Promise<string> {
   return `s:${salt}:${buf.toString("hex")}`;
 }
 
-const rawDatabaseUrl = process.env.DATABASE_URL || "postgres://postgres:postgres@localhost:5432/placeholder";
+const rawDatabaseUrl = process.env.DATABASE_URL?.trim();
 
-// Pastikan Railway/Production URL mendukung SSL jika diperlukan
-const useSsl = rawDatabaseUrl.includes("railway") || rawDatabaseUrl.includes("render") || rawDatabaseUrl.includes("neon") || rawDatabaseUrl.includes("supavisor") || rawDatabaseUrl.includes("sslmode=require");
+if (!rawDatabaseUrl) {
+  throw new Error("DATABASE_URL belum diset. Tambahkan DATABASE_URL pada Railway Variables.");
+}
 
-const databaseUrl = rawDatabaseUrl;
+// Railway private PostgreSQL URLs use the *.railway.internal network.
+// That network is already encrypted by Railway and should NOT be forced
+// through node-postgres TLS. Public/TCP-proxy URLs may explicitly request
+// TLS with ?sslmode=require. The previous code enabled TLS merely because
+// the URL contained the word "railway", which breaks private Railway DBs.
+let databaseUrl = rawDatabaseUrl;
+let useSsl = false;
+try {
+  const parsed = new URL(rawDatabaseUrl);
+  const host = parsed.hostname.toLowerCase();
+  const sslMode = parsed.searchParams.get("sslmode")?.toLowerCase();
+  useSsl = sslMode === "require" || sslMode === "verify-ca" || sslMode === "verify-full";
+  // Keep private Railway connections non-TLS; Railway encrypts private
+  // service-to-service traffic at the network layer.
+  if (host.endsWith(".railway.internal") || host === "railway.internal") {
+    useSsl = false;
+    parsed.searchParams.delete("sslmode");
+    databaseUrl = parsed.toString();
+  }
+} catch {
+  throw new Error("DATABASE_URL tidak valid. Gunakan DATABASE_URL dari service PostgreSQL Railway.");
+}
 
 const globalForDb = globalThis as typeof globalThis & {
   __arenaNextJsPostgresqlPool?: Pool;
@@ -28,7 +50,10 @@ export const pool =
   globalForDb.__arenaNextJsPostgresqlPool ??
   new Pool({
     connectionString: databaseUrl,
-    ssl: useSsl ? { rejectUnauthorized: false } : undefined,
+    ssl: useSsl ? { rejectUnauthorized: false } : false,
+    max: 10,
+    connectionTimeoutMillis: 10000,
+    idleTimeoutMillis: 30000,
   });
 
 if (process.env.NODE_ENV !== "production") {
