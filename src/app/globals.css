@@ -1,18 +1,18 @@
 @import "tailwindcss";
 
 @theme {
-  --color-ink-950: #050505;
-  --color-ink-900: #080808;
-  --color-ink-850: #0a0b0d;
-  --color-ink-800: #0b0c0f;
-  --color-ink-700: #10131a;
-  --color-ink-600: #161a24;
-  --color-aqua-300: #67e8f9;
-  --color-aqua-400: #22d3ee;
-  --color-aqua-500: #06b6d4;
-  --color-electric-400: #60a5fa;
-  --color-electric-500: #3b82f6;
-  --color-water-400: #38bdf8;
+  --color-ink-950: #020205;
+  --color-ink-900: #07050f;
+  --color-ink-850: #0d091a;
+  --color-ink-800: #120e24;
+  --color-ink-700: #1c1538;
+  --color-ink-600: #281e4d;
+  --color-aqua-300: #38bdf8;
+  --color-aqua-400: #06b6d4;
+  --color-aqua-500: #00f0ff;
+  --color-electric-400: #a855f7;
+  --color-electric-500: #9333ea;
+  --color-water-400: #c084fc;
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-display: var(--font-space), var(--font-inter), ui-sans-serif, sans-serif;
 }

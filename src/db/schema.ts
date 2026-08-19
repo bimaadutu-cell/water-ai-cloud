@@ -540,3 +540,5 @@ export const apiRequestLog = pgTable(
   },
   (t) => [index("api_request_created_idx").on(t.createdAt)]
 );
+
+
