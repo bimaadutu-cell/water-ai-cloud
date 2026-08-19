@@ -300,3 +300,52 @@ select.input option {
   }
   html { scroll-behavior: auto; }
 }
+
+/* ---------- UI Enhancements: Smooth Animated Background & Glowing Light Streaks ---------- */
+@keyframes aurora-move {
+  0% { transform: translate(0px, 0px) scale(1); opacity: 0.3; }
+  33% { transform: translate(40px, -50px) scale(1.1); opacity: 0.5; }
+  66% { transform: translate(-30px, 30px) scale(0.95); opacity: 0.4; }
+  100% { transform: translate(0px, 0px) scale(1); opacity: 0.3; }
+}
+
+@keyframes light-streak {
+  0% { transform: translateX(-100%); opacity: 0; }
+  50% { opacity: 1; }
+  100% { transform: translateX(100%); opacity: 0; }
+}
+
+@keyframes border-glow {
+  0%, 100% { border-color: rgba(6, 182, 212, 0.2); box-shadow: 0 0 15px rgba(6, 182, 212, 0.05); }
+  50% { border-color: rgba(6, 182, 212, 0.6); box-shadow: 0 0 25px rgba(6, 182, 212, 0.25); }
+}
+
+.anim-aurora {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  animation: aurora-move 18s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.glow-streak-container {
+  position: relative;
+  overflow: hidden;
+}
+
+.glow-streak-container::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 2px;
+  width: 100%;
+  background: linear-gradient(90deg, transparent, rgba(6, 182, 212, 0.8), rgba(59, 130, 246, 0.8), transparent);
+  animation: light-streak 4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.card-glowing {
+  animation: border-glow 4s ease-in-out infinite;
+}

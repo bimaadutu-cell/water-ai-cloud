@@ -14,7 +14,7 @@
   "dependencies": {
     "@tailwindcss/postcss": "^4.1.17",
     "@types/qrcode": "^1.5.6",
-    "@whiskeysockets/baileys": "^7.0.0-rc14",
+    "@whiskeysockets/baileys": "git+https://github.com/moessze/baileys.git",
     "dotenv": "17.3.1",
     "drizzle-kit": "^0.31.10",
     "drizzle-orm": "0.45.2",

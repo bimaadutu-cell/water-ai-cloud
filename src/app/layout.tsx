@@ -67,8 +67,16 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={`${inter.variable} ${space.variable}`}>
-      <body className="min-h-screen bg-ink-950 text-slate-200">
-        {children}
+      <body className="min-h-screen bg-ink-950 text-slate-200 relative overflow-x-hidden">
+        {/* Animated background aurora and glowing lighting */}
+        <div className="fixed inset-0 pointer-events-none z-0 overflow-hidden">
+          <div className="anim-aurora bg-cyan-500/10 w-[500px] h-[500px] -top-32 -left-32 animate-[aurora-move_20s_ease-in-out_infinite]" />
+          <div className="anim-aurora bg-blue-600/10 w-[600px] h-[600px] top-1/2 -right-48 animate-[aurora-move_25s_ease-in-out_infinite_reverse]" style={{ animationDelay: "-5s" }} />
+          <div className="anim-aurora bg-teal-400/10 w-[450px] h-[450px] -bottom-32 left-1/3 animate-[aurora-move_22s_ease-in-out_infinite]" style={{ animationDelay: "-10s" }} />
+        </div>
+        <div className="relative z-10">
+          {children}
+        </div>
         <script
           dangerouslySetInnerHTML={{
             __html: `

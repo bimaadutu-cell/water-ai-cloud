@@ -375,9 +375,20 @@ export async function waLogout(botId: string) {
 }
 
 export async function requestPairing(botId: string, phone: string) {
-  const rb = running.get(botId);
+  let rb = running.get(botId);
+  if (!rb?.sock) {
+    const bot = await getBotRow(botId);
+    if (!bot) throw new ApiError("BOT_NOT_FOUND", 404, "Bot tidak ditemukan");
+    await startBot(bot);
+    rb = running.get(botId);
+    for (let i = 0; i < 20; i++) {
+      if (rb?.sock) break;
+      await new Promise((r) => setTimeout(r, 500));
+      rb = running.get(botId);
+    }
+  }
   if (!rb?.sock)
-    throw new ApiError("BOT_OFFLINE", 503, "Bot belum online. Start bot dulu.");
+    throw new ApiError("BOT_OFFLINE", 503, "Bot belum siap terhubung. Coba lagi dalam beberapa detik.");
   const digits = phone.replace(/\D/g, "");
   if (!digits) throw new ApiError("INVALID_PHONE", 400, "Nomor tidak valid.");
   try {
