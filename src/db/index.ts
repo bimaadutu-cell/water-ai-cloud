@@ -17,27 +17,33 @@ if (!rawDatabaseUrl) {
   throw new Error("DATABASE_URL belum diset. Tambahkan DATABASE_URL pada Railway Variables.");
 }
 
-// Railway private PostgreSQL URLs use the *.railway.internal network.
-// That network is already encrypted by Railway and should NOT be forced
-// through node-postgres TLS. Public/TCP-proxy URLs may explicitly request
-// TLS with ?sslmode=require. The previous code enabled TLS merely because
-// the URL contained the word "railway", which breaks private Railway DBs.
+// DATABASE_URL is intentionally provider-neutral: Railway PostgreSQL and
+// Neon PostgreSQL both use standard PostgreSQL connection URIs. Neon pooled
+// URLs normally contain sslmode=require (and may contain channel_binding=require).
+// We keep the URI intact and enable node-postgres channel binding explicitly.
 let databaseUrl = rawDatabaseUrl;
 let useSsl = false;
+let enableChannelBinding = false;
 try {
   const parsed = new URL(rawDatabaseUrl);
   const host = parsed.hostname.toLowerCase();
   const sslMode = parsed.searchParams.get("sslmode")?.toLowerCase();
-  useSsl = sslMode === "require" || sslMode === "verify-ca" || sslMode === "verify-full";
-  // Keep private Railway connections non-TLS; Railway encrypts private
-  // service-to-service traffic at the network layer.
+  const channelBinding = parsed.searchParams.get("channel_binding")?.toLowerCase();
+  const isNeon = host.endsWith(".neon.tech") || host.includes(".neon.tech");
+  useSsl = isNeon || sslMode === "require" || sslMode === "verify-ca" || sslMode === "verify-full";
+  enableChannelBinding = isNeon || channelBinding === "require";
+
+  // Railway private PostgreSQL uses the *.railway.internal network. Do not
+  // force TLS there because the private connection is already handled by Railway.
   if (host.endsWith(".railway.internal") || host === "railway.internal") {
     useSsl = false;
+    enableChannelBinding = false;
     parsed.searchParams.delete("sslmode");
+    parsed.searchParams.delete("channel_binding");
     databaseUrl = parsed.toString();
   }
 } catch {
-  throw new Error("DATABASE_URL tidak valid. Gunakan DATABASE_URL dari service PostgreSQL Railway.");
+  throw new Error("DATABASE_URL tidak valid. Gunakan URL PostgreSQL Railway atau Neon yang lengkap.");
 }
 
 const globalForDb = globalThis as typeof globalThis & {
@@ -51,6 +57,7 @@ export const pool =
   new Pool({
     connectionString: databaseUrl,
     ssl: useSsl ? { rejectUnauthorized: false } : false,
+    enableChannelBinding,
     max: 10,
     connectionTimeoutMillis: 10000,
     idleTimeoutMillis: 30000,
@@ -62,61 +69,208 @@ if (process.env.NODE_ENV !== "production") {
 
 export const db = drizzle(pool);
 
+function quoteIdent(identifier: string): string {
+  return `"${identifier.replace(/"/g, '""')}"`;
+}
+
 async function repairLegacyAuthTables() {
-  // Older deployments of WATER AI CLOUD used a different type for some
-  // auth foreign keys (for example INTEGER user_id -> UUID users.id).
-  // PostgreSQL refuses to create/validate such a foreign key, which makes
-  // the whole bootstrap fail and the login endpoint return HTTP 500.
-  //
-  // Password-reset, email-verification and session rows are disposable
-  // authentication state, so when their user_id type is incompatible we
-  // safely recreate those tables. Real users are kept untouched.
-  const tables = ["password_resets", "email_verifications", "sessions", "subscriptions"];
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext('water-ai-cloud-schema'))`);
 
-  const usersId = await pool.query(`
-    SELECT data_type, udt_name
-    FROM information_schema.columns
-    WHERE table_schema = 'public'
-      AND table_name = 'users'
-      AND column_name = 'id'
-    LIMIT 1
-  `);
+    const usersId = await client.query(`
+      SELECT data_type, udt_name
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'users'
+        AND column_name = 'id'
+      LIMIT 1
+    `);
 
-  if (!usersId.rows.length) return;
-
-  const usersIdType = String(usersId.rows[0].udt_name || "");
-  if (usersIdType !== "uuid") {
-    throw new Error(
-      `Skema database tidak kompatibel: public.users.id bertipe ${usersId.rows[0].data_type}, ` +
-      `sedangkan aplikasi membutuhkan UUID. Jangan hapus tabel users; migrasikan users.id terlebih dahulu.`
-    );
-  }
-
-  for (const table of tables) {
-    const column = await pool.query(
-      `
-        SELECT c.data_type, c.udt_name
-        FROM information_schema.columns c
-        WHERE c.table_schema = 'public'
-          AND c.table_name = $1
-          AND c.column_name = 'user_id'
-        LIMIT 1
-      `,
-      [table]
-    );
-
-    if (!column.rows.length) continue;
-
-    const userIdType = String(column.rows[0].udt_name || "");
-    if (userIdType !== "uuid") {
-      console.warn(
-        `[DB MIGRATION] ${table}.user_id bertipe ${userIdType}; ` +
-        `recreating ${table} with UUID user_id.`
-      );
-      // These tables contain only auth/session/billing linkage. Recreating
-      // an incompatible table is safer than trying an invalid cast.
-      await pool.query(`DROP TABLE IF EXISTS "${table}" CASCADE;`);
+    if (!usersId.rows.length) {
+      await client.query("COMMIT");
+      return;
     }
+
+    const usersIdType = String(usersId.rows[0].udt_name || "").toLowerCase();
+
+    // The current application uses UUID user IDs. Older deployments of this
+    // project used BIGINT/INTEGER IDs. Neon is normal PostgreSQL, so migrate
+    // the existing numeric IDs in-place instead of refusing to start.
+    if (["int2", "int4", "int8", "numeric"].includes(usersIdType)) {
+      console.warn(`[DB MIGRATION] users.id is ${usersIdType}; migrating existing user IDs to UUID.`);
+
+      await client.query(`
+        CREATE TEMP TABLE _wac_user_id_map (
+          old_id TEXT PRIMARY KEY,
+          new_id UUID NOT NULL
+        ) ON COMMIT DROP;
+      `);
+      await client.query(`
+        INSERT INTO _wac_user_id_map (old_id, new_id)
+        SELECT id::text, gen_random_uuid()
+        FROM public.users;
+      `);
+
+      // Drop every FK that currently points to users.id. We recreate them
+      // after the columns are converted to UUID.
+      await client.query(`
+        DO $$
+        DECLARE r RECORD;
+        BEGIN
+          FOR r IN
+            SELECT conrelid::regclass AS table_name, conname
+            FROM pg_constraint
+            WHERE contype = 'f'
+              AND confrelid = 'public.users'::regclass
+          LOOP
+            EXECUTE format('ALTER TABLE %s DROP CONSTRAINT IF EXISTS %I', r.table_name, r.conname);
+          END LOOP;
+        END $$;
+      `);
+
+      // Convert every public.*.user_id numeric column that belongs to the
+      // old schema. Data is preserved through the temporary ID mapping.
+      const childColumns = await client.query(`
+        SELECT table_name, udt_name, is_nullable
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND column_name = 'user_id'
+          AND udt_name IN ('int2', 'int4', 'int8', 'numeric')
+          AND table_name <> 'users'
+        ORDER BY table_name
+      `);
+
+      for (const row of childColumns.rows) {
+        const table = quoteIdent(String(row.table_name));
+        const nullable = String(row.is_nullable) === "YES";
+        const tempColumn = quoteIdent("__wac_user_id_uuid");
+
+        await client.query(`ALTER TABLE ${table} ADD COLUMN ${tempColumn} UUID`);
+        await client.query(`
+          UPDATE ${table} t
+          SET ${tempColumn} = m.new_id
+          FROM _wac_user_id_map m
+          WHERE t.user_id::text = m.old_id
+        `);
+
+        const missing = await client.query(`
+          SELECT COUNT(*)::int AS count
+          FROM ${table}
+          WHERE user_id IS NOT NULL AND ${tempColumn} IS NULL
+        `);
+        if (Number(missing.rows[0]?.count || 0) > 0) {
+          throw new Error(`Database migration gagal: ${row.table_name}.user_id memiliki ID user yang tidak ditemukan di public.users.`);
+        }
+
+        if (!nullable) await client.query(`ALTER TABLE ${table} ALTER COLUMN ${tempColumn} SET NOT NULL`);
+        await client.query(`ALTER TABLE ${table} DROP COLUMN user_id`);
+        await client.query(`ALTER TABLE ${table} RENAME COLUMN __wac_user_id_uuid TO user_id`);
+      }
+
+      // Replace users.id itself while preserving every user row and all of
+      // its non-ID data (username, email, password hash, role, etc.).
+      await client.query(`ALTER TABLE public.users ADD COLUMN __wac_id_uuid UUID`);
+      await client.query(`
+        UPDATE public.users u
+        SET __wac_id_uuid = m.new_id
+        FROM _wac_user_id_map m
+        WHERE u.id::text = m.old_id
+      `);
+
+      const missingUsers = await client.query(`
+        SELECT COUNT(*)::int AS count FROM public.users WHERE __wac_id_uuid IS NULL
+      `);
+      if (Number(missingUsers.rows[0]?.count || 0) > 0) {
+        throw new Error("Database migration gagal: ada user yang tidak mendapatkan UUID baru.");
+      }
+
+      const pk = await client.query(`
+        SELECT conname
+        FROM pg_constraint
+        WHERE conrelid = 'public.users'::regclass AND contype = 'p'
+        LIMIT 1
+      `);
+      if (pk.rows[0]?.conname) {
+        await client.query(`ALTER TABLE public.users DROP CONSTRAINT IF EXISTS ${quoteIdent(String(pk.rows[0].conname))}`);
+      }
+
+      await client.query(`ALTER TABLE public.users DROP COLUMN id`);
+      await client.query(`ALTER TABLE public.users RENAME COLUMN __wac_id_uuid TO id`);
+      await client.query(`ALTER TABLE public.users ADD CONSTRAINT users_pkey PRIMARY KEY (id)`);
+    } else if (usersIdType !== "uuid") {
+      throw new Error(
+        `Skema database tidak kompatibel: public.users.id bertipe ${usersId.rows[0].data_type}. ` +
+        `Aplikasi membutuhkan UUID atau BIGINT/INTEGER yang dapat dimigrasikan.`
+      );
+    }
+
+    // Auth/session tables are disposable. If they still have a non-UUID
+    // user_id after migration, recreate them with the current UUID schema.
+    const authTables = ["password_resets", "email_verifications", "sessions"];
+    for (const tableName of authTables) {
+      const column = await client.query(
+        `SELECT udt_name FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = $1 AND column_name = 'user_id' LIMIT 1`,
+        [tableName]
+      );
+      if (column.rows.length && String(column.rows[0].udt_name) !== "uuid") {
+        await client.query(`DROP TABLE IF EXISTS ${quoteIdent(tableName)} CASCADE`);
+      }
+    }
+
+    // Recreate FKs for every UUID user_id column where existing values are
+    // valid. This keeps the database relational without blocking startup on
+    // unrelated legacy rows.
+    const uuidChildren = await client.query(`
+      SELECT c.table_name, c.is_nullable
+      FROM information_schema.columns c
+      WHERE c.table_schema = 'public'
+        AND c.column_name = 'user_id'
+        AND c.udt_name = 'uuid'
+        AND c.table_name <> 'users'
+      ORDER BY c.table_name
+    `);
+
+    for (const row of uuidChildren.rows) {
+      const tableName = String(row.table_name);
+      const table = quoteIdent(tableName);
+      const constraintName = quoteIdent(`${tableName}_user_id_users_id_fkey`);
+      const existing = await client.query(`
+        SELECT 1 FROM pg_constraint
+        WHERE conname = $1 AND conrelid = $2::regclass LIMIT 1
+      `, [`${tableName}_user_id_users_id_fkey`, `public.${tableName}`]);
+      if (existing.rows.length) continue;
+
+      const invalid = await client.query(`
+        SELECT COUNT(*)::int AS count
+        FROM ${table} t
+        LEFT JOIN public.users u ON u.id = t.user_id
+        WHERE t.user_id IS NOT NULL AND u.id IS NULL
+      `);
+      if (Number(invalid.rows[0]?.count || 0) > 0) {
+        console.warn(`[DB MIGRATION] Skipping FK on ${tableName}.user_id because legacy orphan rows exist.`);
+        continue;
+      }
+
+      const nullable = String(row.is_nullable) === "YES";
+      const onDelete = tableName === "logs" || tableName === "ticket_messages" || tableName === "webhook_events" || tableName === "api_request_log" ? "SET NULL" : "CASCADE";
+      // SET NULL is only valid for nullable columns.
+      const action = onDelete === "SET NULL" && !nullable ? "CASCADE" : onDelete;
+      await client.query(`
+        ALTER TABLE ${table}
+        ADD CONSTRAINT ${constraintName}
+        FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE ${action}
+      `);
+    }
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
   }
 }
 

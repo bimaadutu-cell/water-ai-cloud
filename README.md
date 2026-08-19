@@ -73,7 +73,7 @@ Coba langsung: **/docs/playground** (request sungguhan ke backend).
 
 ## Environment
 
-Lihat `.env.example`. Variabel penting: `DATABASE_URL`, `APP_URL`, `AUTH_SECRET`, `AI_API_KEY` (opsional, server-side), `STORAGE_CONFIG` (folder default `./data`).
+Lihat `.env.example`. Variabel penting: `DATABASE_URL` (Railway PostgreSQL or Neon PostgreSQL), `APP_URL`, `AUTH_SECRET`, `AI_API_KEY` (opsional, server-side), `STORAGE_CONFIG` (folder default `./data`).
 
 ## Struktur
 
@@ -98,3 +98,10 @@ Platform ini untuk otomasi komunikasi yang sah. Koneksi WhatsApp berjalan melalu
 serta peraturan yang berlaku di wilayah Anda. Jangan gunakan untuk spam atau gangguan.
 
 © 2026 WATER AI CLOUD.
+
+
+## Neon PostgreSQL
+
+The application accepts a standard Neon pooled PostgreSQL URL through `DATABASE_URL`, including URLs with `sslmode=require&channel_binding=require`. The server detects Neon automatically and enables TLS plus node-postgres channel binding. It also contains a startup migration for older WATER AI CLOUD databases whose `public.users.id` is `BIGINT`/`INTEGER`: existing user IDs are mapped to UUIDs without deleting the user records, and dependent `user_id` columns are migrated before foreign keys are restored.
+
+**Important:** never put a real Neon password in source code, `.env.example`, or Git. Configure the full connection string only in Railway Variables.
