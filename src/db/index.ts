@@ -11,39 +11,57 @@ async function hashPassword(pw: string): Promise<string> {
   return `s:${salt}:${buf.toString("hex")}`;
 }
 
-const rawDatabaseUrl = process.env.DATABASE_URL?.trim();
-
-if (!rawDatabaseUrl) {
-  throw new Error("DATABASE_URL belum diset. Tambahkan DATABASE_URL pada Railway Variables.");
-}
-
-// DATABASE_URL is intentionally provider-neutral: Railway PostgreSQL and
-// Neon PostgreSQL both use standard PostgreSQL connection URIs. Neon pooled
-// URLs normally contain sslmode=require (and may contain channel_binding=require).
-// We keep the URI intact and enable node-postgres channel binding explicitly.
-let databaseUrl = rawDatabaseUrl;
-let useSsl = false;
-let enableChannelBinding = false;
-try {
-  const parsed = new URL(rawDatabaseUrl);
-  const host = parsed.hostname.toLowerCase();
-  const sslMode = parsed.searchParams.get("sslmode")?.toLowerCase();
-  const channelBinding = parsed.searchParams.get("channel_binding")?.toLowerCase();
-  const isNeon = host.endsWith(".neon.tech") || host.includes(".neon.tech");
-  useSsl = isNeon || sslMode === "require" || sslMode === "verify-ca" || sslMode === "verify-full";
-  enableChannelBinding = isNeon || channelBinding === "require";
-
-  // Railway private PostgreSQL uses the *.railway.internal network. Do not
-  // force TLS there because the private connection is already handled by Railway.
-  if (host.endsWith(".railway.internal") || host === "railway.internal") {
-    useSsl = false;
-    enableChannelBinding = false;
-    parsed.searchParams.delete("sslmode");
-    parsed.searchParams.delete("channel_binding");
-    databaseUrl = parsed.toString();
+// IMPORTANT: never connect to PostgreSQL (or throw) while Next.js is building.
+// Railway runtime variables are available to the running container, but they
+// are not guaranteed to be available during `next build`. The previous version
+// threw at module import when DATABASE_URL was absent, which made Railway's
+// Docker build fail before the application could even start.
+function buildPoolConfig() {
+  const url = process.env.DATABASE_URL?.trim();
+  if (!url) {
+    // A harmless placeholder lets Next.js import the module during build.
+    // Any real database operation is blocked by ensureDatabaseReady(), which
+    // gives a clear runtime configuration error instead of silently using it.
+    return {
+      connectionString: "postgresql://localhost:5432/postgres",
+      ssl: false,
+      enableChannelBinding: false,
+    } as const;
   }
-} catch {
-  throw new Error("DATABASE_URL tidak valid. Gunakan URL PostgreSQL Railway atau Neon yang lengkap.");
+
+  let databaseUrl = url;
+  let useSsl = false;
+  let enableChannelBinding = false;
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    const sslMode = parsed.searchParams.get("sslmode")?.toLowerCase();
+    const channelBinding = parsed.searchParams.get("channel_binding")?.toLowerCase();
+    const isNeon = host.endsWith(".neon.tech") || host.includes(".neon.tech");
+
+    useSsl = isNeon || sslMode === "require" || sslMode === "verify-ca" || sslMode === "verify-full";
+    enableChannelBinding = isNeon || channelBinding === "require";
+
+    // Railway private PostgreSQL does not need TLS on its private network.
+    if (host.endsWith(".railway.internal") || host === "railway.internal") {
+      useSsl = false;
+      enableChannelBinding = false;
+      parsed.searchParams.delete("sslmode");
+      parsed.searchParams.delete("channel_binding");
+      databaseUrl = parsed.toString();
+    }
+  } catch {
+    throw new Error("DATABASE_URL tidak valid. Gunakan URL PostgreSQL Railway atau Neon yang lengkap.");
+  }
+
+  return {
+    connectionString: databaseUrl,
+    ssl: useSsl ? { rejectUnauthorized: false } : false,
+    enableChannelBinding,
+    max: 10,
+    connectionTimeoutMillis: 10000,
+    idleTimeoutMillis: 30000,
+  } as const;
 }
 
 const globalForDb = globalThis as typeof globalThis & {
@@ -54,16 +72,9 @@ const globalForDb = globalThis as typeof globalThis & {
 
 export const pool =
   globalForDb.__arenaNextJsPostgresqlPool ??
-  new Pool({
-    connectionString: databaseUrl,
-    ssl: useSsl ? { rejectUnauthorized: false } : false,
-    enableChannelBinding,
-    max: 10,
-    connectionTimeoutMillis: 10000,
-    idleTimeoutMillis: 30000,
-  });
+  new Pool(buildPoolConfig());
 
-if (process.env.NODE_ENV !== "production") {
+if (!globalForDb.__arenaNextJsPostgresqlPool) {
   globalForDb.__arenaNextJsPostgresqlPool = pool;
 }
 

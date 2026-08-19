@@ -105,3 +105,10 @@ serta peraturan yang berlaku di wilayah Anda. Jangan gunakan untuk spam atau gan
 The application accepts a standard Neon pooled PostgreSQL URL through `DATABASE_URL`, including URLs with `sslmode=require&channel_binding=require`. The server detects Neon automatically and enables TLS plus node-postgres channel binding. It also contains a startup migration for older WATER AI CLOUD databases whose `public.users.id` is `BIGINT`/`INTEGER`: existing user IDs are mapped to UUIDs without deleting the user records, and dependent `user_id` columns are migrated before foreign keys are restored.
 
 **Important:** never put a real Neon password in source code, `.env.example`, or Git. Configure the full connection string only in Railway Variables.
+
+
+## Railway + Neon deployment fix
+
+This build keeps database initialization out of the Next.js build phase. `DATABASE_URL` is read at runtime, so Railway can build the Docker image without requiring the database secret as a Docker build argument. At runtime the app supports standard PostgreSQL/Neon URLs, including `sslmode=require` and `channel_binding=require`.
+
+The startup migration also handles legacy `public.users.id` values stored as BIGINT/INTEGER by mapping them to UUID and updating `user_id` foreign-key columns before the application creates its UUID-based tables.
