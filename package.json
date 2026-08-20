@@ -29,7 +29,6 @@
     "qrcode": "^1.5.4",
     "react": "19.2.6",
     "react-dom": "19.2.6",
-    "sharp": "^0.35.3",
     "tailwindcss": "^4.1.17",
     "typescript": "^5.9.3",
     "wa-sticker-formatter": "^4.4.4",

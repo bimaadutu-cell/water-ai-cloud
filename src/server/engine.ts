@@ -28,6 +28,7 @@ import { ApiError, addLog, notify, getSetting } from "./lib";
 import { ssePublish, startSse } from "./sse";
 import { dispatchWebhook } from "./webhooks";
 import { runCommand, answerGame } from "./commands";
+import { REGISTRY } from "./commands/registry";
 import { consumeLimit, type CmdCtx } from "./commands/core";
 import { checkFlood } from "./commands/state";
 
@@ -265,6 +266,25 @@ export async function startBot(bot: {
   running.set(bot.id, rb);
   await setBotStatus(bot.id, "connecting");
   await setWaStatus(bot.id, "connecting");
+
+  // Sync / ensure all REGISTRY commands exist for this bot so commands always respond
+  try {
+    for (const c of REGISTRY) {
+      await db
+        .insert(commands)
+        .values({
+          botId: bot.id,
+          userId: bot.userId,
+          name: c.name,
+          description: c.description,
+          category: c.category,
+          handler: c.handler,
+          permissions: c.permissions,
+          premium: !!c.premium,
+        })
+        .onConflictDoNothing();
+    }
+  } catch {}
   await addLog({
     userId: bot.userId,
     botId: bot.id,
