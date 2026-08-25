@@ -51,6 +51,7 @@ export interface CmdResult {
     mimetype?: string;
     caption?: string;
     ptt?: boolean;
+    jpegThumbnail?: Buffer;
   };
 }
 
@@ -67,6 +68,11 @@ export const tmpDir = path.join(storageRoot, "tmp");
 fs.mkdirSync(tmpDir, { recursive: true });
 
 export function ffmpegPath(): string | null {
+  const configured = process.env.FFMPEG_PATH?.trim();
+  if (configured && fs.existsSync(configured)) return configured;
+  for (const candidate of ["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg"]) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
   try {
     const p = require("ffmpeg-static");
     return typeof p === "string" ? p : null;

@@ -27,7 +27,8 @@ AI integration, dashboard real-time (SSE), billing, admin panel, dan PWA.
    - `DATABASE_URL` — otomatis terisi oleh plugin Railway Postgres
    - `APP_URL` — domain publik Railway (mis. `https://water-ai-cloud-v2.up.railway.app`)
    - `ADMIN_INITIAL_PASSWORD` — (opsional) password awal akun admin; default `Water@2026`
-   - `AI_API_KEY` — (opsional) untuk command AI
+   - `AI_API_KEY` — (opsional) hanya untuk command AI seperti `.ai`, `.vision`, dan `.brat` tidak lagi memakai key ini
+   - `COBALT_API_URL` — (opsional) URL instance Cobalt yang Anda miliki/kelola sebagai fallback untuk URL publik yang ditolak yt-dlp
    - Volume persisten yang dipasang ke `STORAGE_CONFIG` — wajib jika sesi WhatsApp harus bertahan setelah restart/deploy
 5. Deploy. **Setiap boot** server menjalankan `scripts/migrate.mjs` (auto-migrasi skema + seed admin/pricing, idempotent) sehingga:
    - kolom sisa versi lama (mis. `users.password`) dihapus otomatis
@@ -76,9 +77,13 @@ Web (dashboard) → API → Auth → Bot Manager → WhatsApp Session (Baileys)
 
 ## Downloader nyata
 
-Command `.play`/`.song`/`.audio` mengambil audio dan `.video`/`.media` mengambil video melalui binary `yt-dlp` resmi. Query judul diubah menjadi pencarian `ytsearch1`; URL publik YouTube, TikTok, Instagram, dan situs lain diproses melalui extractor yang tersedia pada versi yt-dlp yang terpasang. `ffmpeg` dipakai untuk menggabungkan atau mengonversi stream. Ukuran media dibatasi 50 MB. Media privat, media yang membutuhkan login, playlist, dan bypass proteksi tidak diproses.
+Command `.play`/`.song`/`.audio` mengambil audio dan `.video`/`.media`/`.allvid` mengambil video melalui binary `yt-dlp` resmi. Query judul diubah menjadi pencarian `ytsearch1`; URL publik YouTube, TikTok, Instagram, dan situs lain diproses melalui extractor yang tersedia pada versi yt-dlp yang terpasang. `ffmpeg` dipakai untuk menggabungkan atau mengonversi stream. Ukuran media dibatasi 50 MB. Thumbnail asli dari metadata yt-dlp diteruskan sebagai thumbnail video bila dapat diakses. Media privat, media yang membutuhkan login, playlist, dan bypass proteksi tidak diproses.
 
-Pada image Docker, binary di-install ke `/usr/local/bin/yt-dlp` dan `ffmpeg` di-install dari Alpine. Untuk instalasi lokal, pasang `yt-dlp` serta `ffmpeg`, lalu atur `YTDLP_PATH` bila binary tidak berada di `PATH`. Engine tidak mengklaim sukses bila extractor gagal; bot mengirim pesan error yang sebenarnya.
+Pada image Docker Bookworm, binary di-install ke `/usr/local/bin/yt-dlp`, Python 3 dan ffmpeg di-install sebagai dependency runtime. Untuk instalasi lokal, pasang `yt-dlp` serta `ffmpeg`, lalu atur `YTDLP_PATH` bila binary tidak berada di `PATH`. Jika extractor utama ditolak sumber publik tertentu, isi `COBALT_API_URL` dengan instance Cobalt yang Anda kelola sendiri. Engine tidak mengklaim sukses bila extractor atau fallback gagal; bot mengirim pesan error yang sebenarnya.
+
+## BRAT dan sticker lokal tanpa AI
+
+`.brat teks` membuat sticker WebP lokal dengan renderer SVG/Sharp dan tidak memanggil AI. `.bratgif teks`, `.bratvideo teks`, dan `.bratvid teks` membuat animated WebP sticker 3 detik menggunakan FFmpeg. `.bratsticker` membuat variasi teks BRAT lokal. Semua command membutuhkan argumen teks dan akan mengirim petunjuk penggunaan jika argumen kosong.
 
 ## REST API (Gateway v1)
 

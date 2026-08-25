@@ -33,6 +33,7 @@ interface ExtractedInfo {
   uploader?: string;
   durationSec?: number;
   webpageUrl?: string;
+  thumbnailUrl?: string;
 }
 
 interface DownloadedMedia {
@@ -40,6 +41,7 @@ interface DownloadedMedia {
   filename: string;
   mimetype: string;
   info: ExtractedInfo;
+  thumbnail?: Buffer;
 }
 
 function sourceFor(arg: string): string {
@@ -89,6 +91,7 @@ function selectInfo(raw: any): ExtractedInfo {
     uploader: candidate.uploader || candidate.channel || undefined,
     durationSec: Number.isFinite(Number(candidate.duration)) ? Number(candidate.duration) : undefined,
     webpageUrl: candidate.webpage_url || candidate.original_url || undefined,
+    thumbnailUrl: typeof candidate.thumbnail === "string" ? candidate.thumbnail : undefined,
   };
 }
 
@@ -212,12 +215,21 @@ async function downloadWithYtDlp(source: string, mode: "audio" | "video", info: 
     if (!stat.isFile() || stat.size < 64) throw new CmdError("❌ File media kosong atau rusak.");
     if (stat.size > MAX_FILE_BYTES) throw new CmdError("📦 File melebihi batas 50 MB yang didukung bot.");
     const buffer = await fs.promises.readFile(selected);
+    let thumbnail: Buffer | undefined;
+    if (info.thumbnailUrl) {
+      try {
+        thumbnail = await safeFetch(info.thumbnailUrl, 2 * 1024 * 1024);
+      } catch {
+        thumbnail = undefined;
+      }
+    }
     const fileName = `${sanitizeFilename(info.title)}.${expectedExt}`;
     return {
       buffer,
       filename: fileName,
       mimetype: mode === "audio" ? "audio/mpeg" : "video/mp4",
       info,
+      thumbnail,
     };
   } finally {
     await fs.promises.rm(workDir, { recursive: true, force: true }).catch(() => {});
@@ -270,6 +282,7 @@ async function downloadCommand(ctx: CmdCtx, mode: "audio" | "video"): Promise<Cm
         filename: media.filename,
         mimetype: media.mimetype,
         caption: mediaCaption(media, mode),
+        jpegThumbnail: media.thumbnail,
       },
     };
   } catch (error: any) {
@@ -295,6 +308,13 @@ export async function media(ctx: CmdCtx): Promise<CmdResult> {
   if (!arg) return { text: `Pakai: ${ctx.bot.prefix}media <URL atau judul>` };
   // Media umum diperlakukan sebagai video agar URL TikTok/Instagram/Reels
   // tidak salah dikirim sebagai audio. Gunakan .play untuk audio eksplisit.
+  return downloadCommand(ctx, "video");
+}
+
+/** AllVid uses the existing multi-engine downloader with yt-dlp first. */
+export async function allvid(ctx: CmdCtx): Promise<CmdResult> {
+  const arg = ctx.arg.trim();
+  if (!arg) return { text: `Pakai: ${ctx.bot.prefix}allvid <URL publik atau judul>` };
   return downloadCommand(ctx, "video");
 }
 

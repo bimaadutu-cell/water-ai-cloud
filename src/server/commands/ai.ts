@@ -270,16 +270,27 @@ export async function movie(ctx: CmdCtx): Promise<CmdResult> {
   if (key) {
     try {
       const j = await jget(`https://api.themoviedb.org/3/search/movie?api_key=${key}&query=${encodeURIComponent(ctx.arg)}&language=id-ID`);
-      const m: any = j?.results?.[0];
+      const results: any[] = Array.isArray(j?.results) ? j.results.slice(0, 3) : [];
+      const m: any = results[0];
       if (!m) return { text: `❌ Film "${ctx.arg}" tidak ditemukan di TMDB.` };
-      return {
-        text: box("🎬 MOVIE", [
-          `Judul : ${m.title}`,
-          `Tahun : ${m.release_date ?? "-"}`,
-          `Rating: ${m.vote_average ?? "-"}/10`,
-          `Plot  : ${truncate(m.overview ?? "-", 400)}`,
-        ]),
-      };
+      const details = box("🎬 MOVIE RESULT", [
+        `Judul : ${m.title}`,
+        `Tahun : ${m.release_date || "-"}`,
+        `Rating: ${m.vote_average ?? "-"}/10`,
+        `Plot  : ${truncate(m.overview || "-", 550)}`,
+        results.length > 1 ? `\nHasil lain:\n${results.slice(1).map((item) => `• ${item.title} (${item.release_date || "-"}) — ${item.vote_average ?? "-"}/10`).join("\n")}` : "",
+      ].filter(Boolean));
+      if (m.poster_path) {
+        try {
+          const poster = await fetch(`https://image.tmdb.org/t/p/w500${m.poster_path}`, { signal: AbortSignal.timeout(20000) });
+          if (poster.ok) {
+            return { media: { kind: "image" as const, buffer: Buffer.from(await poster.arrayBuffer()), mimetype: poster.headers.get("content-type") || "image/jpeg", caption: details } };
+          }
+        } catch {
+          /* Poster optional: text result remains valid. */
+        }
+      }
+      return { text: details };
     } catch {
       return { text: "❌ Gagal mengakses TMDB." };
     }

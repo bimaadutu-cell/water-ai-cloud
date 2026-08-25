@@ -64,7 +64,7 @@ export const REGISTRY: RegistryCommand[] = [
   c("question", "ai", "Jawab pertanyaan dengan AI"),
   c("study", "ai", "Mode belajar: jelaskan materi step-by-step"),
 
-  /* 🎨 STICKER — real WebP generation (sharp + wa-sticker-formatter) */
+  /* 🎨 STICKER — real WebP generation (Sharp + FFmpeg) */
   c("sticker", "sticker", "Buat sticker (reply gambar / URL)"),
   c("s", "sticker", "Alias .sticker"),
   c("stiker", "sticker", "Alias .sticker"),
@@ -79,10 +79,11 @@ export const REGISTRY: RegistryCommand[] = [
   c("stickerinfo", "sticker", "Info EXIF sticker (reply sticker)"),
 
   /* 🅱️ BRAT */
-  c("brat", "brat", "Chat AI persona BRAT: .brat <teks>"),
+  c("brat", "brat", "Sticker teks BRAT WebP lokal: .brat <teks> (tanpa AI)"),
   c("bratsticker", "brat", "Sticker caption BRAT acak"),
-  c("bratgif", "brat", "Video/GIF teks BRAT (ffmpeg)", "all", true),
-  c("bratvideo", "brat", "Video teks BRAT 3 detik (ffmpeg)", "all", true),
+  c("bratgif", "brat", "Animated WebP sticker BRAT 3 detik (ffmpeg, tanpa AI)"),
+  c("bratvideo", "brat", "Animated WebP sticker BRAT 3 detik (ffmpeg, tanpa AI)"),
+  c("bratvid", "brat", "Alias bratvideo: animated WebP sticker (tanpa AI)"),
 
   /* 🖼️ IMAGE — real processing with sharp */
   c("removebg", "image", "Hapus background (butuh REMOVEBG_API_KEY)", "all", true),
@@ -124,6 +125,7 @@ export const REGISTRY: RegistryCommand[] = [
 
   /* 📥 DOWNLOADER — real pipeline: search → validate → download → send */
   c("play", "downloader", "Download audio otomatis: .play <judul/url>"),
+  c("allvid", "downloader", "Downloader video multi-engine: URL publik"),
   c("song", "downloader", "Alias .play (audio)"),
   c("audio", "downloader", "Alias .play (audio)"),
   c("video", "downloader", "Download video otomatis: .video <judul/url>"),

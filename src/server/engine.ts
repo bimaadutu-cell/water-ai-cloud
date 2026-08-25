@@ -666,14 +666,65 @@ function normalize(m: any): NormalizedMsg | null {
   return { type, text, sender, remoteJid, isGroup, messageId: key?.id || "" };
 }
 
+export function normalizePhoneNumber(value: unknown): string {
+  let raw = String(value ?? "").trim().toLowerCase();
+  if (!raw) return "";
+  raw = raw.split("@")[0].split(":")[0].replace(/\D/g, "");
+  if (raw.startsWith("0")) raw = `62${raw.slice(1)}`;
+  return raw;
+}
+
+export function normalizeJid(value: unknown): string {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (!raw) return "";
+  if (raw.endsWith("@g.us")) return raw;
+  const phone = normalizePhoneNumber(raw);
+  return phone ? `${phone}@s.whatsapp.net` : raw;
+}
+
+function participantIsAdmin(participant: any): boolean {
+  return participant?.admin === true || participant?.admin === "admin" || participant?.admin === "superadmin";
+}
+
 async function isGroupAdmin(rb: RunningBot, groupId: string, sender: string) {
   try {
     const meta = await rb.sock.groupMetadata(groupId);
-    const p = (meta.participants || []).find((x: any) => x.id === sender);
-    return p?.admin === true;
+    const target = normalizeJid(sender);
+    const p = (meta.participants || []).find((x: any) => normalizeJid(x.id) === target);
+    return participantIsAdmin(p);
   } catch {
     return false;
   }
+}
+
+async function isBotAdmin(rb: RunningBot, groupId: string): Promise<boolean> {
+  try {
+    const meta = await rb.sock.groupMetadata(groupId);
+    const botJid = normalizeJid(rb.sock.user?.id);
+    const p = (meta.participants || []).find((x: any) => normalizeJid(x.id) === botJid);
+    return participantIsAdmin(p);
+  } catch {
+    return false;
+  }
+}
+
+async function resolvePermissions(rb: RunningBot, bot: BotRow, n: NormalizedMsg, ownerRows: { phone: string }[]) {
+  const sender = normalizePhoneNumber(n.sender);
+  const configuredOwners = [bot.ownerNumber, ...ownerRows.map((row) => row.phone)]
+    .map(normalizePhoneNumber)
+    .filter(Boolean);
+  const isOwner = configuredOwners.includes(sender);
+  const isGroupAdmin = n.isGroup ? await isGroupAdminForMessage(rb, n.remoteJid, n.sender) : false;
+  const isBotAdmin = n.isGroup ? await isBotAdminForGroup(rb, n.remoteJid) : false;
+  return { isGroup: n.isGroup, isOwner, isGroupAdmin, isBotAdmin };
+}
+
+async function isGroupAdminForMessage(rb: RunningBot, groupId: string, sender: string) {
+  return isGroupAdmin(rb, groupId, sender);
+}
+
+async function isBotAdminForGroup(rb: RunningBot, groupId: string) {
+  return isBotAdmin(rb, groupId);
 }
 
 async function handleIncoming(rb: RunningBot, bot: BotRow, m: any) {
@@ -709,15 +760,15 @@ async function handleIncoming(rb: RunningBot, bot: BotRow, m: any) {
   });
 
   const prefix = bot.prefix || "!";
-  const isCommandLike =
-    ["text", "reply", "button", "list"].includes(n.type) && n.text.startsWith(prefix);
-  const senderNumber = n.sender.split("@")[0];
+  const isCommandLike = n.text.startsWith(prefix);
   const botOwnersRows = (await db
     .select({ phone: botOwners.phone })
     .from(botOwners)
     .where(eq(botOwners.botId, bot.id))
     .catch(() => [])) as { phone: string }[];
-  const isBotOwner = !!bot.ownerNumber && senderNumber === bot.ownerNumber;
+  const permissions = await resolvePermissions(rb, bot, n, botOwnersRows);
+  const isBotOwner = permissions.isOwner;
+  const senderNumber = normalizePhoneNumber(n.sender);
 
   // bot-level maintenance mode — only owner is answered
   const botSettings = (bot.settings ?? {}) as any;
@@ -747,7 +798,7 @@ async function handleIncoming(rb: RunningBot, bot: BotRow, m: any) {
       return;
     }
     const needAdmin = cfg?.antilink || cfg?.antibot || cfg?.autodelete;
-    const isAdm = needAdmin ? await isGroupAdmin(rb, n.remoteJid, n.sender) : false;
+    const isAdm = needAdmin ? permissions.isGroupAdmin || permissions.isOwner : false;
     if (cfg?.antiflood && ["text", "reply"].includes(n.type) && checkFlood(bot.id, n.remoteJid, n.sender, 8)) {
       await deleteMsg(rb, n);
       await addWarn(rb, bot, n, "flood");
@@ -807,8 +858,7 @@ async function handleIncoming(rb: RunningBot, bot: BotRow, m: any) {
         }
         if (cmd.permissions === "admin") {
           const okAdmin =
-            isBotOwner || botOwnersRows.some((o) => senderNumber === o.phone) ||
-            (n.isGroup && (await isGroupAdmin(rb, n.remoteJid, n.sender)));
+            permissions.isOwner || permissions.isGroupAdmin;
           if (!okAdmin) {
             await sendInternal(rb, n.remoteJid, "⛔ Hanya admin grup / owner bot.");
             return;
@@ -927,10 +977,8 @@ async function handleIncoming(rb: RunningBot, bot: BotRow, m: any) {
   if (n.isGroup) {
     const anti = auto.find((a) => a.type === "antiLink");
     if (anti?.enabled && /https?:\/\//i.test(n.text)) {
-      const senderNumber = n.sender.split("@")[0];
-      const isAdmin =
-        (bot.ownerNumber && senderNumber === bot.ownerNumber) ||
-        (await isGroupAdmin(rb, n.remoteJid, n.sender));
+      const senderNumber = normalizePhoneNumber(n.sender);
+      const isAdmin = permissions.isOwner || permissions.isGroupAdmin;
       if (!isAdmin) {
         await sendInternal(rb, n.remoteJid, anti.action?.text || "Link tidak diperbolehkan di grup ini.");
         await addLog({ userId: bot.userId, botId: bot.id, level: "warning", event: "automation.antilink", message: `Link diblokir dari ${n.sender}` });
@@ -1133,11 +1181,12 @@ async function sendMedia(rb: RunningBot, to: string, media: {
   mimetype?: string;
   caption?: string;
   ptt?: boolean;
+  jpegThumbnail?: Buffer;
 }) {
   try {
     let content: any;
     if (media.kind === "image") content = { image: media.buffer, caption: media.caption };
-    else if (media.kind === "video") content = { video: media.buffer, caption: media.caption, mimetype: media.mimetype };
+    else if (media.kind === "video") content = { video: media.buffer, caption: media.caption, mimetype: media.mimetype, jpegThumbnail: media.jpegThumbnail };
     else if (media.kind === "audio")
       content = { audio: media.buffer, mimetype: media.mimetype ?? "audio/mpeg", ptt: !!media.ptt };
     else if (media.kind === "sticker") content = { sticker: media.buffer };

@@ -39,17 +39,15 @@ const extOf = (mime: string): string => {
 };
 
 /* -------------------------------- STICKERS ------------------------------ */
-async function makeSticker(buffer: Buffer, ctx: CmdCtx): Promise<Buffer> {
-  const { default: StickerFactory } = await import("wa-sticker-formatter");
-  const Sticker = (StickerFactory as any).default ?? (StickerFactory as any);
-  const sticker = new Sticker(buffer, {
-    pack: "WATER AI",
-    author: ctx.bot.ownerNumber ? "+" + ctx.bot.ownerNumber : "WATER AI CLOUD",
-    type: (StickerFactory as any).StickerTypes?.FULL ?? 1,
-    quality: 70,
-    ffmpegPath: FF ?? undefined,
-  });
-  return (await sticker.toBuffer()) as Buffer;
+async function makeSticker(buffer: Buffer, _ctx: CmdCtx): Promise<Buffer> {
+  // Keep the sticker path deterministic and native-light: no AI and no
+  // WhatsApp accepts a valid WebP sticker payload; animated stickers are
+  // produced separately by FFmpeg below.
+  return sharp(buffer)
+    .rotate()
+    .resize({ width: 512, height: 512, fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
+    .webp({ quality: 82, effort: 4 })
+    .toBuffer();
 }
 
 export async function sticker(ctx: CmdCtx): Promise<CmdResult> {
@@ -91,6 +89,38 @@ export async function randomsticker(ctx: CmdCtx): Promise<CmdResult> {
   const e = EMOJIS[Math.floor(Math.random() * EMOJIS.length)];
   return textsticker({ ...ctx, arg: e } as any);
 }
+
+function bratSvg(text: string, frame = 0): Buffer {
+  const clean = text.trim().slice(0, 180) || "BRAT";
+  const lines = clean.split(/\s+/).flatMap((line) => line.match(/.{1,16}/g) ?? [line]).slice(0, 5);
+  const y0 = 170 + (frame % 2) * 10;
+  const linesSvg = lines.map((line, i) => `<text x="240" y="${y0 + i * 66}" text-anchor="middle">${svgEscape(line.toUpperCase())}</text>`).join("");
+  return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="480" height="480"><defs><linearGradient id="g" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#ff5da2"/><stop offset="1" stop-color="#7c3aed"/></linearGradient></defs><rect width="480" height="480" rx="64" fill="url(#g)"/><circle cx="80" cy="80" r="35" fill="#fff" opacity=".18"/><circle cx="410" cy="390" r="55" fill="#fff" opacity=".12"/><style>text{font-family:Impact,Arial,sans-serif;font-size:52px;font-weight:900;fill:#fff;stroke:#111827;stroke-width:7px;paint-order:stroke;letter-spacing:1px}</style>${linesSvg}<text x="240" y="430" text-anchor="middle" font-family="Arial" font-size="24" font-weight="bold" fill="#fff">WATER AI • BRAT</text></svg>`);
+}
+
+/** BRAT is intentionally a deterministic local text sticker; it never calls an AI service. */
+export async function brat(ctx: CmdCtx): Promise<CmdResult> {
+  if (!ctx.arg.trim()) return { text: `Pakai: ${ctx.bot.prefix}brat <teks> — menghasilkan sticker BRAT WebP tanpa AI.` };
+  const png = await sharp(bratSvg(ctx.arg)).png().toBuffer();
+  const webp = await makeSticker(png, ctx);
+  return { media: { kind: "sticker", buffer: webp, mimetype: "image/webp" } };
+}
+
+async function bratAnimated(ctx: CmdCtx, mode: "gif" | "vid"): Promise<CmdResult> {
+  if (!ctx.arg.trim()) return { text: `Pakai: ${ctx.bot.prefix}brat${mode === "gif" ? "gif" : "vid"} <teks> — animated sticker WebP tanpa AI.` };
+  const out = await withTempFile(await sharp(bratSvg(ctx.arg, 0)).png().toBuffer(), ".png", async (inPath) => {
+    const outPath = `${inPath}.${mode}.webp`;
+    await ffmpeg(["-loop", "1", "-i", inPath, "-t", "3", "-vf", "scale=480:480:force_original_aspect_ratio=decrease,pad=480:480:(ow-iw)/2:(oh-ih)/2,zoompan=z='min(zoom+0.0015,1.18)':d=75:s=480x480:fps=25,format=yuva420p", "-an", "-c:v", "libwebp", "-lossless", "0", "-q:v", "70", "-loop", "0", outPath], 120000);
+    return outPath;
+  });
+  const buffer = fs.readFileSync(out);
+  fs.rmSync(out, { force: true });
+  return { media: { kind: "sticker", buffer, mimetype: "image/webp" } };
+}
+
+export const bratgif = (ctx: CmdCtx) => bratAnimated(ctx, "gif");
+export const bratvideo = (ctx: CmdCtx) => bratAnimated(ctx, "vid");
+export const bratvid = bratvideo;
 
 function svgEscape(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;");
@@ -517,27 +547,5 @@ export async function bratsticker(ctx: CmdCtx): Promise<CmdResult> {
   const c: CmdCtx = { ...ctx, arg: line };
   return textsticker(c);
 }
-
-async function bratVideo(ctx: CmdCtx): Promise<CmdResult> {
-  const line = BRAT_LINES[Math.floor(Math.random() * BRAT_LINES.length)];
-  const out = await withTempFile(Buffer.from(""), ".txt", async (tmp) => {
-    const outPath = tmp.replace(".txt", ".mp4");
-    const safe = line.replace(/'/g, "").replace(/:/g, "\\:");
-    await ffmpeg(
-      ["-f", "lavfi", "-i", "color=c=0x071018:s=640x360:d=3", "-vf", `drawtext=text='${safe}':fontcolor=0x22d3ee:fontsize=40:x=(w-text_w)/2:y=(h-text_h)/2`, "-c:v", "libx264", "-pix_fmt", "yuv420p", outPath],
-      90000
-    );
-    return outPath;
-  });
-  const buf = fs.readFileSync(out);
-  fs.rmSync(out, { force: true });
-  return { media: { kind: "video", buffer: buf, mimetype: "video/mp4", caption: "💅 BRAT" } };
-}
-export async function bratgif(ctx: CmdCtx): Promise<CmdResult> {
-  const r = await bratVideo(ctx);
-  if (r.media) r.media.caption = "💅 BRAT (video)";
-  return r;
-}
-export const bratvideo = bratgif;
 
 export { sanitizeFilename };

@@ -21,7 +21,6 @@ const nextConfig: NextConfig = {
     "pino",
     "sharp",
     "ffmpeg-static",
-    "wa-sticker-formatter",
     "file-type",
     "pdf-lib",
   ],

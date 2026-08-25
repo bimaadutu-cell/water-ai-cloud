@@ -70,7 +70,7 @@ const H: Record<string, Handler> = {
   translate: ai.translate,
   vision: ai.vision,
   ocr: ai.ocr,
-  brat: ai.brat,
+  brat: media.brat,
 
   /* 📚 EDUCATION */
   math: info.math,
@@ -107,6 +107,7 @@ const H: Record<string, Handler> = {
   bratsticker: media.bratsticker,
   bratgif: media.bratgif,
   bratvideo: media.bratvideo,
+  bratvid: media.bratvid,
 
   /* 🖼️ IMAGE */
   removebg: media.removebg,
@@ -136,6 +137,7 @@ const H: Record<string, Handler> = {
 
   /* 📥 DOWNLOADER */
   play: dl.play,
+  allvid: dl.allvid,
   song: dl.song,
   audio: dl.audioCmd,
   video: dl.video,
