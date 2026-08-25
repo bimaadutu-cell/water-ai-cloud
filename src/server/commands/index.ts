@@ -99,6 +99,8 @@ const H: Record<string, Handler> = {
   gifsticker: media.gifsticker,
   stickersearch: media.stickersearch,
   randomsticker: media.randomsticker,
+  smeme: media.smeme,
+  rvo: media.rvo,
   stickerinfo: media.stickerinfo,
 
   /* 🅱️ BRAT */
@@ -157,6 +159,7 @@ const H: Record<string, Handler> = {
   setdesc: grp.setdesc,
   setppgc: grp.setppgc,
   groupstats: grp.groupstats,
+  swgc: grp.swgc,
 
   /* 🛡️ SECURITY */
   antilink: grp.antilink,

@@ -92,6 +92,51 @@ export async function randomsticker(ctx: CmdCtx): Promise<CmdResult> {
   return textsticker({ ...ctx, arg: e } as any);
 }
 
+function svgEscape(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;");
+}
+
+function memeLines(value: string, max = 22): string[] {
+  return value.trim().split(/\s+/).flatMap((word) => {
+    const parts = word.match(new RegExp(`.{1,${max}}`, "g")) ?? [word];
+    return parts;
+  }).slice(0, 4);
+}
+
+/** Reply an image and use `atas|bawah` (or one text for bottom) to make a meme sticker. */
+export async function smeme(ctx: CmdCtx): Promise<CmdResult> {
+  const src = await getMediaSource(ctx);
+  if (!src.mimetype.startsWith("image/")) throw new CmdError("⚠️ .smeme hanya menerima reply foto/gambar.");
+  if (!ctx.arg.trim()) return { text: `Pakai: ${ctx.bot.prefix}smeme teks atas|teks bawah\nContoh: ${ctx.bot.prefix}smeme ADUHH|MALU AKU` };
+  const parts = ctx.arg.split(/\s*[|;]\s*/);
+  const top = parts.length > 1 ? parts[0] : "";
+  const bottom = parts.length > 1 ? parts.slice(1).join(" ") : parts[0];
+  const input = await sharp(src.buffer).rotate().jpeg({ quality: 92 }).toBuffer();
+  const meta = await sharp(input).metadata();
+  const width = Math.max(320, Math.min(960, meta.width ?? 640));
+  const height = Math.max(320, Math.min(960, meta.height ?? 640));
+  const topLines = memeLines(top);
+  const bottomLines = memeLines(bottom);
+  const textSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
+    <style>text{font-family:Impact,Arial,sans-serif;font-weight:900;font-size:${Math.max(28, Math.floor(width / 12))}px;fill:#fff;stroke:#000;stroke-width:${Math.max(2, Math.floor(width / 180))}px;paint-order:stroke;letter-spacing:1px}</style>
+    ${topLines.map((line, i) => `<text x="50%" y="${50 + i * Math.max(34, Math.floor(width / 11))}" text-anchor="middle">${svgEscape(line.toUpperCase())}</text>`).join("")}
+    ${bottomLines.map((line, i) => `<text x="50%" y="${height - 35 - (bottomLines.length - 1 - i) * Math.max(34, Math.floor(width / 11))}" text-anchor="middle">${svgEscape(line.toUpperCase())}</text>`).join("")}
+  </svg>`;
+  const rendered = await sharp(input).composite([{ input: Buffer.from(textSvg), top: 0, left: 0 }]).png().toBuffer();
+  const webp = await makeSticker(rendered, ctx);
+  return { media: { kind: "sticker", buffer: webp, mimetype: "image/webp" } };
+}
+
+/** Re-send a quoted view-once image/video/audio as a normal WhatsApp media message. */
+export async function rvo(ctx: CmdCtx): Promise<CmdResult> {
+  if (!ctx.replyKey) return { text: `Pakai: reply foto/video sekali lihat lalu ketik ${ctx.bot.prefix}rvo` };
+  const src = await ctx.getRepliedMedia();
+  if (!src) throw new CmdError("⚠️ Media view-once tidak dapat dibaca. Pastikan bot masih memiliki akses ke pesan tersebut.");
+  const kind: "image" | "video" | "audio" | "document" = src.mimetype.startsWith("image/") ? "image" : src.mimetype.startsWith("video/") ? "video" : src.mimetype.startsWith("audio/") ? "audio" : "document";
+  const ext = extOf(src.mimetype).replace(/^\./, "") || "bin";
+  return { media: { kind, buffer: src.buffer, mimetype: src.mimetype, filename: `recovered-view-once.${ext}`, caption: "✅ Media view-once berhasil disimpan sebagai media biasa." } };
+}
+
 export async function toimg(ctx: CmdCtx): Promise<CmdResult> {
   const src = await getMediaSource(ctx);
   const png = await sharp(src.buffer).rotate().png().toBuffer();

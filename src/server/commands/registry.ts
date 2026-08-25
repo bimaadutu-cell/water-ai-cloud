@@ -74,6 +74,8 @@ export const REGISTRY: RegistryCommand[] = [
   c("gifsticker", "sticker", "Sticker dari GIF (reply GIF / URL)", "all", true),
   c("stickersearch", "sticker", "Cari sticker (butuh sumber yang mengizinkan)", "all", true),
   c("randomsticker", "sticker", "Sticker emoji acak"),
+  c("smeme", "sticker", "Stiker meme dari reply foto: .smeme atas|bawah"),
+  c("rvo", "sticker", "Simpan ulang media sekali lihat (reply media)"),
   c("stickerinfo", "sticker", "Info EXIF sticker (reply sticker)"),
 
   /* 🅱️ BRAT */
@@ -145,6 +147,7 @@ export const REGISTRY: RegistryCommand[] = [
   c("setdesc", "group", "Ubah deskripsi grup: .setdesc <teks>", "admin"),
   c("setppgc", "group", "Ubah PP grup (reply gambar)", "admin"),
   c("groupstats", "group", "Statistik grup"),
+  c("swgc", "group", "Kirim teks/media grup ke WhatsApp Status", "admin"),
 
   /* 🛡️ SECURITY — real per-group engine */
   c("antilink", "security", "Anti link: .antilink on|off", "admin"),

@@ -611,11 +611,24 @@ interface NormalizedMsg {
   messageId: string;
 }
 
+function unwrapMessage(message: any): any {
+  let current = message || {};
+  for (let i = 0; i < 5; i++) {
+    const next = current?.viewOnceMessage?.message
+      ?? current?.viewOnceMessageV2?.message
+      ?? current?.viewOnceMessageV2Extension?.message
+      ?? current?.ephemeralMessage?.message;
+    if (!next) break;
+    current = next;
+  }
+  return current;
+}
+
 function normalize(m: any): NormalizedMsg | null {
   const key = m?.key;
   const remoteJid: string | undefined = key?.remoteJid;
   if (!remoteJid || remoteJid === "status@broadcast" || key?.fromMe) return null;
-  const msg = m.message || {};
+  const msg = unwrapMessage(m.message || {});
   let type = "text";
   let text = "";
   if (typeof msg.conversation === "string") text = msg.conversation;
@@ -818,6 +831,7 @@ async function handleIncoming(rb: RunningBot, bot: BotRow, m: any) {
         try {
           const result = await runCommand(cmdCtx);
           if (result.media) await sendMedia(rb, n.remoteJid, result.media);
+          else if (result.buttons?.length) await sendInteractive(rb, n.remoteJid, result.text || "", result.buttons);
           else if (result.text) await sendInternal(rb, n.remoteJid, result.text);
           await addLog({
             userId: bot.userId,
@@ -846,6 +860,36 @@ async function handleIncoming(rb: RunningBot, bot: BotRow, m: any) {
           .catch(() => {});
         return;
       }
+      const available = await db
+        .select({ name: commands.name })
+        .from(commands)
+        .where(and(eq(commands.botId, bot.id), eq(commands.enabled, true)));
+      const distance = (a: string, b: string): number => {
+        const row = Array.from({ length: b.length + 1 }, (_, i) => i);
+        for (let i = 1; i <= a.length; i++) {
+          let prev = row[0];
+          row[0] = i;
+          for (let j = 1; j <= b.length; j++) {
+            const saved = row[j];
+            row[j] = a[i - 1] === b[j - 1]
+              ? prev
+              : Math.min(prev + 1, row[j] + 1, row[j - 1] + 1);
+            prev = saved;
+          }
+        }
+        return row[b.length];
+      };
+      const ranked = available
+        .map((entry) => ({ name: entry.name, score: distance(cmdName, entry.name) }))
+        .sort((a, b) => a.score - b.score)
+        .filter((entry) => entry.score <= Math.max(2, Math.ceil(cmdName.length * 0.45)))
+        .slice(0, 3);
+      if (ranked.length) {
+        await sendInternal(rb, n.remoteJid, `⚠️ Command *${prefix}${cmdName}* tidak ditemukan.\n\nMungkin maksud Anda:\n${ranked.map((entry) => `• *${prefix}${entry.name}*`).join("\\n")}\n\nKetik *${prefix}menu* untuk kategori.`);
+      } else {
+        await sendInternal(rb, n.remoteJid, `⚠️ Command *${prefix}${cmdName}* tidak ditemukan. Ketik *${prefix}menu* untuk melihat kategori.`);
+      }
+      return;
     }
   }
 
@@ -928,6 +972,21 @@ async function handleIncoming(rb: RunningBot, bot: BotRow, m: any) {
   }
 }
 
+async function sendInteractive(rb: RunningBot, to: string, text: string, buttons: { id: string; text: string }[]) {
+  try {
+    await rb.sock.sendMessage(to, {
+      text,
+      footer: "WATER AI CLOUD",
+      buttons: buttons.map((button) => ({ buttonId: button.id, buttonText: { displayText: button.text }, type: 1 })),
+      headerType: 1,
+    });
+    await recordOut(rb, to, "text", text);
+  } catch {
+    // Some WhatsApp clients disable legacy interactive buttons; text remains reliable.
+    await sendInternal(rb, to, text);
+  }
+}
+
 async function sendInternal(rb: RunningBot, to: string, text: string) {
   try {
     await rb.sock.sendMessage(to, { text });
@@ -954,7 +1013,13 @@ function makeCmdCtx(
   t0: number,
   cmd: any
 ): CmdCtx {
-  const quotedKey = m?.message?.extendedTextMessage?.contextInfo?.participantQuoteKey ?? null;
+  const contextInfo = m?.message?.extendedTextMessage?.contextInfo ?? {};
+  const quotedKey = contextInfo?.stanzaId ? {
+    remoteJid: n.remoteJid,
+    fromMe: false,
+    id: contextInfo.stanzaId,
+    participant: contextInfo.participant || n.sender,
+  } : null;
   const parts = n.text.split(/\s+/).filter(Boolean);
   return {
     bot,
@@ -977,10 +1042,11 @@ function makeCmdCtx(
     replyKey: quotedKey,
     getRepliedMedia: async () => {
       try {
-        const quoted = m?.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-        if (!quoted) return null;
+        const quotedRaw = contextInfo?.quotedMessage;
+        if (!quotedRaw) return null;
+        const quoted = unwrapMessage(quotedRaw);
         const buf = (await (downloadMediaMessage as any)(
-          { key: m.key, message: { extendedTextMessage: { contextInfo: { quotedMessage: quoted } } } } as any,
+          { key: quotedKey ?? m.key, message: quoted } as any,
           "buffer",
           {}
         )) as Buffer;

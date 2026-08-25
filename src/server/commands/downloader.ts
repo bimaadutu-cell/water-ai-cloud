@@ -47,7 +47,10 @@ function sourceFor(arg: string): string {
 }
 
 function ytdlpBinary(): string {
-  return process.env.YTDLP_PATH?.trim() || "yt-dlp";
+  const configured = process.env.YTDLP_PATH?.trim();
+  if (configured) return configured;
+  if (fs.existsSync("/usr/local/bin/yt-dlp")) return "/usr/local/bin/yt-dlp";
+  return "yt-dlp";
 }
 
 function displayError(error: any): string {
@@ -113,6 +116,8 @@ function commonArgs(outputTemplate: string, source: string): string[] {
     "--no-playlist",
     "--abort-on-error",
     "--abort-on-unavailable-fragments",
+    "--no-part",
+    "--force-overwrites",
     "--restrict-filenames",
     "--retries",
     "2",
@@ -126,6 +131,42 @@ function commonArgs(outputTemplate: string, source: string): string[] {
   if (FF) args.push("--ffmpeg-location", FF);
   args.push(source);
   return args;
+}
+
+async function downloadWithCobalt(url: string, mode: "audio" | "video", info: ExtractedInfo): Promise<DownloadedMedia> {
+  const endpoint = process.env.COBALT_API_URL?.trim().replace(/\/$/, "");
+  if (!endpoint) throw new CmdError("❌ URL ini ditolak extractor yt-dlp. Atur COBALT_API_URL ke instance Cobalt milik Anda untuk fallback.");
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({
+      url,
+      downloadMode: mode === "audio" ? "audio" : "auto",
+      audioFormat: mode === "audio" ? "mp3" : undefined,
+      videoQuality: "720",
+      filenameStyle: "basic",
+    }),
+    signal: AbortSignal.timeout(90000),
+  });
+  const data: any = await response.json().catch(() => null);
+  if (!response.ok || !data) throw new CmdError(`❌ Fallback downloader gagal (HTTP ${response.status}).`);
+  let direct = data.url as string | undefined;
+  if (data.status === "picker" && Array.isArray(data.picker)) {
+    const picked = data.picker.find((item: any) => mode === "audio" ? item.type === "audio" : item.type !== "audio");
+    direct = picked?.url;
+  }
+  if (!direct || !/^https?:\/\//i.test(direct)) {
+    const code = data.error?.code ? `: ${data.error.code}` : "";
+    throw new CmdError(`❌ Fallback downloader tidak menghasilkan URL media${code}.`);
+  }
+  const buffer = await safeFetch(direct, MAX_FILE_BYTES);
+  const fileName = String(data.filename || `${sanitizeFilename(info.title)}.${mode === "audio" ? "mp3" : "mp4"}`);
+  return {
+    buffer,
+    filename: fileName.includes(".") ? fileName : `${fileName}.${mode === "audio" ? "mp3" : "mp4"}`,
+    mimetype: mode === "audio" ? "audio/mpeg" : "video/mp4",
+    info,
+  };
 }
 
 async function downloadWithYtDlp(source: string, mode: "audio" | "video", info: ExtractedInfo): Promise<DownloadedMedia> {
@@ -209,9 +250,18 @@ async function downloadCommand(ctx: CmdCtx, mode: "audio" | "video"): Promise<Cm
   const key = await progress(ctx.sock, ctx.n.remoteJid, null, `🔎 Mencari media dengan yt-dlp...\nQuery: ${arg.slice(0, 80)}`);
   try {
     const source = sourceFor(arg);
-    const info = await extractInfo(source);
-    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, `⬇️ Mengunduh ${mode === "audio" ? "audio" : "video"} nyata...\n${info.title.slice(0, 80)}`);
-    const media = await downloadWithYtDlp(source, mode, info);
+    let info: ExtractedInfo;
+    let media: DownloadedMedia;
+    try {
+      info = await extractInfo(source);
+      if (key) await progress(ctx.sock, ctx.n.remoteJid, key, `⬇️ Mengunduh ${mode === "audio" ? "audio" : "video"} nyata...\\n${info.title.slice(0, 80)}`);
+      media = await downloadWithYtDlp(source, mode, info);
+    } catch (primaryError) {
+      if (!/^https?:\/\//i.test(arg) || !process.env.COBALT_API_URL?.trim()) throw primaryError;
+      info = { title: `Media ${new URL(arg).hostname}`, webpageUrl: arg };
+      if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🔁 Extractor utama ditolak sumber. Mencoba fallback media yang dikonfigurasi...");
+      media = await downloadWithCobalt(arg, mode, info);
+    }
     if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "✅ Selesai. Mengirim media...");
     return {
       media: {

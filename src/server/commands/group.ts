@@ -42,6 +42,35 @@ async function requireGroup(ctx: CmdCtx): Promise<boolean> {
   return true;
 }
 
+/** Publish group text or a replied image/video/audio to the real WhatsApp Status feed. */
+export async function swgc(ctx: CmdCtx): Promise<CmdResult> {
+  if (!(await requireGroup(ctx))) return { text: (ctx as any)._err };
+  const statusJid = "status@broadcast";
+  const arg = ctx.arg.trim();
+  const quoted = await ctx.getRepliedMedia();
+  if (!arg && !quoted) return { text: `Pakai: reply media lalu ketik ${ctx.bot.prefix}swgc [caption], atau ${ctx.bot.prefix}swgc <teks>` };
+  try {
+    const meta: any = await ctx.sock.groupMetadata(ctx.n.remoteJid);
+    const subject = String(meta.subject || "Grup");
+    if (quoted) {
+      const caption = arg || `Dibagikan dari grup ${subject}`;
+      const payload = quoted.mimetype.startsWith("image/")
+        ? { image: quoted.buffer, caption }
+        : quoted.mimetype.startsWith("video/")
+          ? { video: quoted.buffer, caption }
+          : quoted.mimetype.startsWith("audio/")
+            ? { audio: quoted.buffer, mimetype: quoted.mimetype, ptt: false }
+            : { document: quoted.buffer, mimetype: quoted.mimetype, fileName: "group-status.bin", caption };
+      await ctx.sock.sendMessage(statusJid, payload);
+    } else {
+      await ctx.sock.sendMessage(statusJid, { text: `*${subject}*\n\n${arg}` });
+    }
+    return { text: "✅ Berhasil dipublikasikan ke WhatsApp Status." };
+  } catch (error: any) {
+    return { text: `❌ Gagal membuat status: ${String(error?.message || "bot belum memiliki akses status").slice(0, 220)}` };
+  }
+}
+
 export async function groupinfo(ctx: CmdCtx): Promise<CmdResult> {
   if (!(await requireGroup(ctx))) return { text: (ctx as any)._err };
   try {

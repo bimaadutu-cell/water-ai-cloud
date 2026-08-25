@@ -125,17 +125,24 @@ const TEBAK_GAMBAR: { subject: string; wiki: string; answers: string[] }[] = [
 ];
 
 /* -------------------------------- handlers ------------------------------ */
-export async function menu(ctx: CmdCtx): Promise<CmdResult> {
+async function renderMenu(ctx: CmdCtx, full: boolean): Promise<CmdResult> {
   const rows = await db
     .select({ name: commands.name, category: commands.category })
     .from(commands)
     .where(and(eq(commands.botId, ctx.bot.id), eq(commands.enabled, true)));
   const owners = await db.select({ phone: botOwners.phone }).from(botOwners).where(eq(botOwners.botId, ctx.bot.id));
   const name = (ctx.raw?.pushName as string) || "user";
-  return { text: buildMenu(ctx.bot, name, rows, [ctx.bot.ownerNumber ?? "", ...owners.map((o) => o.phone)].filter(Boolean)) };
+  return { text: buildMenu(ctx.bot, name, rows, [ctx.bot.ownerNumber ?? "", ...owners.map((o) => o.phone)].filter(Boolean), full) };
 }
 
-export const allmenu = menu;
+export async function menu(ctx: CmdCtx): Promise<CmdResult> {
+  const result = await renderMenu(ctx, false);
+  return { ...result, buttons: [{ id: `${ctx.bot.prefix || "!"}allmenu`, text: "ALLMENU" }] };
+}
+
+export async function allmenu(ctx: CmdCtx): Promise<CmdResult> {
+  return renderMenu(ctx, true);
+}
 
 export async function help(ctx: CmdCtx): Promise<CmdResult> {
   const p = (ctx.bot.prefix || "!").trim();

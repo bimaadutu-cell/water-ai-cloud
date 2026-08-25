@@ -43,6 +43,7 @@ export interface CmdCtx {
 
 export interface CmdResult {
   text?: string;
+  buttons?: { id: string; text: string }[];
   media?: {
     kind: "image" | "video" | "audio" | "document" | "sticker";
     buffer: Buffer;
@@ -217,7 +218,8 @@ export function buildMenu(
   bot: (typeof bots.$inferSelect),
   username: string,
   enabledCommands: { name: string; category: string }[],
-  ownerNumbers: string[]
+  ownerNumbers: string[],
+  full = false
 ): string {
   const p = (bot.prefix || "!").trim();
   const statusMap: Record<string, string> = {
@@ -250,14 +252,27 @@ export function buildMenu(
   L.push(`│ ◦ *Owner* : ${ownerNumbers[0] ?? bot.ownerNumber ?? "-"}`);
   L.push("│");
   L.push("╰────────────────────");
-  for (const cat of CATEGORIES) {
-    const cmds = byCat.get(cat.id);
-    if (!cmds || !cmds.length) continue;
+  if (full) {
+    for (const cat of CATEGORIES) {
+      const cmds = byCat.get(cat.id);
+      if (!cmds || !cmds.length) continue;
+      L.push("");
+      L.push(`╭─「 *${cat.emoji} ${cat.label}* 」`);
+      L.push("│");
+      for (const cmd of cmds) L.push(`│ ◦ *${cmd}*`);
+      L.push("│");
+      L.push("╰────────────────────");
+    }
+  } else {
     L.push("");
-    L.push(`╭─「 *${cat.emoji} ${cat.label}* 」`);
+    L.push("╭─「 *📚 KATEGORI COMMAND* 」");
     L.push("│");
-    for (const cmd of cmds) L.push(`│ ◦ *${cmd}*`);
+    for (const cat of CATEGORIES) {
+      const cmds = byCat.get(cat.id);
+      if (cmds?.length) L.push(`│ ◦ *${cat.emoji} ${cat.label}* — ${cmds.length} command`);
+    }
     L.push("│");
+    L.push(`│ ◦ Ketik *${p}allmenu* untuk melihat semua command`);
     L.push("╰────────────────────");
   }
   L.push("");
