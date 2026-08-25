@@ -197,7 +197,8 @@ export const REGISTRY: RegistryCommand[] = [
   c("buy", "premium", "Beli premium (petunjuk pembayaran)"),
 
   /* 📊 INFORMATION */
-  c("menu", "information", "Menu lengkap (satu pesan scroll)"),
+  c("menu", "information", "Menu lengkap dengan format tebal"),
+  c("allmenu", "information", "Alias menu lengkap dengan format tebal"),
   c("help", "information", "Help singkat + cara pakai"),
   c("status", "information", "Status bot & statistik"),
   c("ping", "information", "Uji latensi"),

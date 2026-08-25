@@ -1,5 +1,5 @@
-import path from "path";
 import fs from "fs";
+import path from "path";
 import { eq, and, inArray, sql } from "drizzle-orm";
 import QRCode from "qrcode";
 import pino from "pino";
@@ -37,6 +37,7 @@ interface RunningBot {
   botId: string;
   userId: string;
   sock: any;
+  authState: any;
   startedAt: number;
   onlineSince: number | null;
   retries: number;
@@ -47,8 +48,8 @@ interface RunningBot {
 const running = new Map<string, RunningBot>();
 let booted = false;
 
-const dataDirFor = (botId: string) =>
-  path.join(process.cwd(), "data", "bots", botId);
+const storageRoot = path.resolve(process.env.STORAGE_CONFIG || path.join(process.cwd(), "data"));
+const dataDirFor = (botId: string) => path.join(storageRoot, "bots", botId);
 
 export function isEngineRunning(botId: string) {
   return running.has(botId) && !!running.get(botId)?.sock;
@@ -91,10 +92,16 @@ async function getBotRow(botId: string) {
 async function attachSocket(rb: RunningBot) {
   const dataDir = dataDirFor(rb.botId);
   fs.mkdirSync(dataDir, { recursive: true });
+  // Baileys memberi nama fungsi ini useMultiFileAuthState, tetapi ini API backend
+  // yang tidak terkait React Hooks.
+  // eslint-disable-next-line react-hooks/rules-of-hooks
   const { state, saveCreds } = await useMultiFileAuthState(dataDir);
+  rb.authState = state;
   const sock = makeWASocket({
     auth: state,
-    browser: Browsers.ubuntu("Water AI Cloud"),
+    // Descriptor protokol yang didukung Baileys: Ubuntu / Chrome / 22.04.4.
+    // Ini tidak menjalankan Chrome palsu; koneksi tetap WebSocket langsung ke WhatsApp.
+    browser: Browsers.ubuntu("Chrome"),
     syncFullHistory: false,
     markOnlineOnConnect: true,
     logger: pino({ level: "silent" }) as any,
@@ -257,6 +264,7 @@ export async function startBot(bot: {
     botId: bot.id,
     userId: bot.userId,
     sock: null,
+    authState: null,
     startedAt: Date.now(),
     onlineSince: null,
     retries: 0,
@@ -267,24 +275,39 @@ export async function startBot(bot: {
   await setBotStatus(bot.id, "connecting");
   await setWaStatus(bot.id, "connecting");
 
-  // Sync / ensure all REGISTRY commands exist for this bot so commands always respond
+  // Sync / ensure all REGISTRY commands exist for this bot so commands always respond.
+  // The schema historically has no unique (botId, name) constraint, so do an
+  // explicit existence check instead of relying on ON CONFLICT (which would not
+  // protect this table and could duplicate commands on every reconnect).
   try {
+    const existingRows = await db
+      .select({ name: commands.name })
+      .from(commands)
+      .where(eq(commands.botId, bot.id));
+    const existing = new Set(existingRows.map((row) => row.name.toLowerCase()));
     for (const c of REGISTRY) {
-      await db
-        .insert(commands)
-        .values({
-          botId: bot.id,
-          userId: bot.userId,
-          name: c.name,
-          description: c.description,
-          category: c.category,
-          handler: c.handler,
-          permissions: c.permissions,
-          premium: !!c.premium,
-        })
-        .onConflictDoNothing();
+      if (existing.has(c.name.toLowerCase())) continue;
+      await db.insert(commands).values({
+        botId: bot.id,
+        userId: bot.userId,
+        name: c.name,
+        description: c.description,
+        category: c.category,
+        handler: c.handler,
+        permissions: c.permissions,
+        premium: !!c.premium,
+      });
+      existing.add(c.name.toLowerCase());
     }
-  } catch {}
+  } catch (e: any) {
+    await addLog({
+      userId: bot.userId,
+      botId: bot.id,
+      level: "error",
+      event: "commands.sync_failed",
+      message: `Sinkronisasi command gagal: ${e?.message ?? e}`,
+    }).catch(() => {});
+  }
   await addLog({
     userId: bot.userId,
     botId: bot.id,
@@ -410,17 +433,23 @@ export async function requestPairing(botId: string, phone: string) {
   if (!rb?.sock)
     throw new ApiError("BOT_OFFLINE", 503, "Bot belum siap terhubung. Coba lagi dalam beberapa detik.");
   const digits = phone.replace(/\D/g, "");
-  if (!digits) throw new ApiError("INVALID_PHONE", 400, "Nomor tidak valid.");
+  if (!/^\d{7,15}$/.test(digits)) {
+    throw new ApiError("INVALID_PHONE", 400, "Nomor WhatsApp harus berupa 7–15 digit dalam format internasional, contoh 6281234567890.");
+  }
+  if (rb.authState?.creds?.registered) {
+    throw new ApiError("ALREADY_CONNECTED", 409, "Sesi WhatsApp bot ini sudah terhubung. Logout terlebih dahulu jika ingin menautkan nomor lain.");
+  }
   try {
-    // Ensure socket is fully ready for pairing
-    await new Promise((r) => setTimeout(r, 2000));
-    if (!rb.sock.authState.creds.registered) {
-      await rb.sock.waitForConnectionUpdate((u: any) => !!u.qr || !!u.connection);
-    }
+    // Pairing code harus diminta lewat socket WebSocket nyata yang sudah terbuka.
+    await Promise.race([
+      rb.sock.waitForSocketOpen(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Socket WhatsApp belum terbuka setelah 15 detik.")), 15000)),
+    ]);
     const code: string = await rb.sock.requestPairingCode(digits);
     await setWaStatus(botId, "waiting", {
       lastPairingCode: code,
       lastPairingAt: new Date(),
+      qrDataUrl: null,
     });
     ssePublish("wa:pairing", { botId, code, at: Date.now() });
     await addLog({

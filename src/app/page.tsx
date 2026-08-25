@@ -375,7 +375,7 @@ export default async function LandingPage() {
           <div>
             <Logo size={30} />
             <p className="mt-3 max-w-xs text-xs leading-relaxed text-slate-500">
-              "Powerful WhatsApp Automation, Built for Everyone."
+              &quot;Powerful WhatsApp Automation, Built for Everyone.&quot;
             </p>
           </div>
           <div>

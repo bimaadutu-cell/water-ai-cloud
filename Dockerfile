@@ -3,6 +3,10 @@
 # so a stale/empty Railway Postgres recovers automatically.
 
 FROM node:22-alpine AS base
+ARG YTDLP_VERSION=2026.08.19
+RUN apk add --no-cache ca-certificates ffmpeg wget \
+  && wget -q "https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/yt-dlp" -O /usr/local/bin/yt-dlp \
+  && chmod 0755 /usr/local/bin/yt-dlp
 WORKDIR /app
 ENV NODE_ENV=production
 

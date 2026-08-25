@@ -58,7 +58,8 @@ export function useApi<T = any>(path: string | null, deps: unknown[] = []) {
     } finally {
       setLoading(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Dependencies are intentionally forwarded by this generic data hook.
+    // eslint-disable-next-line react-hooks/exhaustive-deps, react-hooks/use-memo
   }, [path, ...deps]);
   useEffect(() => {
     load();

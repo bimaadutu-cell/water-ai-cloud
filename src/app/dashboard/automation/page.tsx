@@ -265,9 +265,9 @@ export default function AutomationPage() {
                 {a.type === "keyword" && (
                   <>
                     <b className="text-cyan-300">WHEN</b> message contains{" "}
-                    <code className="text-emerald-300">"{a.trigger?.contains}"</code>
+                    <code className="text-emerald-300">&quot;{a.trigger?.contains}&quot;</code>
                     <br />
-                    <b className="text-cyan-300">THEN</b> send: <code className="text-slate-300">"{a.action?.text}"</code>
+                    <b className="text-cyan-300">THEN</b> send: <code className="text-slate-300">&quot;{a.action?.text}&quot;</code>
                   </>
                 )}
                 {a.type === "scheduled" && (
@@ -279,7 +279,7 @@ export default function AutomationPage() {
                 )}
                 {["autoReply", "welcome", "goodbye", "antiLink"].includes(a.type) && (
                   <>
-                    <b className="text-cyan-300">THEN</b> send: <code className="text-slate-300">"{a.action?.text}"</code>
+                    <b className="text-cyan-300">THEN</b> send: <code className="text-slate-300">&quot;{a.action?.text}&quot;</code>
                   </>
                 )}
                 {a.type === "aiReply" && <span>Respon otomatis memakai model AI yang dikonfigurasi di atas.</span>}

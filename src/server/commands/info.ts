@@ -135,14 +135,17 @@ export async function menu(ctx: CmdCtx): Promise<CmdResult> {
   return { text: buildMenu(ctx.bot, name, rows, [ctx.bot.ownerNumber ?? "", ...owners.map((o) => o.phone)].filter(Boolean)) };
 }
 
-export async function help(): Promise<CmdResult> {
-  const p = "";
+export const allmenu = menu;
+
+export async function help(ctx: CmdCtx): Promise<CmdResult> {
+  const p = (ctx.bot.prefix || "!").trim();
   return {
     text: box("📖 HELP", [
-      `Ketik ${p}.menu untuk lihat semua command.`,
-      "Contoh: .play faded, .weather jawa barat, .math 2+2*10",
-      "Reply gambar dengan .sticker untuk buat sticker.",
-      ".help <command> untuk detail singkat.",
+      `Ketik ${p}menu atau ${p}allmenu untuk melihat semua command.`,
+      `Contoh: ${p}play faded, ${p}weather jawa barat, ${p}math 2+2*10`,
+      `Untuk BRAT: ${p}brat halo — jangan jalankan ${p}brat tanpa teks.`,
+      `Reply gambar dengan ${p}sticker untuk membuat sticker.`,
+      `${p}help <command> untuk detail singkat.`,
     ]),
   };
 }
@@ -368,7 +371,6 @@ export async function javascript(ctx: CmdCtx): Promise<CmdResult> {
   if (!ctx.arg) return { text: "Pakai: .javascript <kode JS> (parse-only, aman)" };
   try {
     // Compile WITHOUT executing — real syntax validation only.
-    // eslint-disable-next-line no-new-func
     new Function(ctx.arg);
     return { text: "✅ Sintaks JavaScript valid (tidak dieksekusi — parse only)." };
   } catch (e: any) {

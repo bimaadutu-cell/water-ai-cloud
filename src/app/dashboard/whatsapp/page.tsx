@@ -158,6 +158,8 @@ export default function WhatsAppPage() {
             </div>
             {wa?.qrDataUrl ? (
               <div className="flex flex-col items-center">
+                {/* QR is a server-generated data URL; next/image cannot optimize this dynamic source. */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={wa.qrDataUrl}
                   alt="QR code WhatsApp"

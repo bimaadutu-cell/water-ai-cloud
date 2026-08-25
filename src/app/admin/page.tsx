@@ -529,10 +529,18 @@ function System() {
   const [busy, setBusy] = useState<string | null>(null);
 
   useEffect(() => {
-    if (maint && !form) setForm(maint);
+    if (maint && !form) {
+      // Initialises the editable form from the first API response.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setForm(maint);
+    }
   }, [maint, form]);
   useEffect(() => {
-    if (pricing && pricingText === null) setPricingText(JSON.stringify(pricing, null, 2));
+    if (pricing && pricingText === null) {
+      // Initialises the editable JSON editor from the first API response.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setPricingText(JSON.stringify(pricing, null, 2));
+    }
   }, [pricing, pricingText]);
 
   const saveMaint = async () => {

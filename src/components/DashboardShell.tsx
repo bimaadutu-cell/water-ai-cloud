@@ -76,6 +76,8 @@ export default function DashboardShell({ user, children }: { user: User; childre
   }, []);
 
   useEffect(() => {
+    // The effect subscribes to the live dashboard stream and starts the async fetch.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadNotifs();
     const es = new EventSource("/api/events/dash");
     esRef.current = es;
@@ -119,9 +121,12 @@ export default function DashboardShell({ user, children }: { user: User; childre
 
   // close drawer on navigation
   useEffect(() => {
-    setDrawer(false);
-    setNotifOpen(false);
-    setUserMenu(false);
+    const timer = window.setTimeout(() => {
+      setDrawer(false);
+      setNotifOpen(false);
+      setUserMenu(false);
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [pathname]);
 
   const logout = async () => {

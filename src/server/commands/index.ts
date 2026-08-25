@@ -13,6 +13,7 @@ export type Handler = (ctx: CmdCtx) => Promise<CmdResult>;
 const H: Record<string, Handler> = {
   /*  INFORMATION */
   menu: info.menu,
+  allmenu: info.allmenu,
   help: info.help,
   status: info.status,
   ping: info.ping,

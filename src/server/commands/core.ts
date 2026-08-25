@@ -61,12 +61,12 @@ export const MAX_FILE_BYTES = 50 * 1024 * 1024; // 50 MB
 const PREMIUM_DAILY_FREE = 10;
 const HARD_DAILY_LIMIT = 200;
 
-export const tmpDir = path.join(process.cwd(), "data", "tmp");
+const storageRoot = path.resolve(process.env.STORAGE_CONFIG || path.join(process.cwd(), "data"));
+export const tmpDir = path.join(storageRoot, "tmp");
 fs.mkdirSync(tmpDir, { recursive: true });
 
 export function ffmpegPath(): string | null {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const p = require("ffmpeg-static");
     return typeof p === "string" ? p : null;
   } catch {
@@ -219,7 +219,7 @@ export function buildMenu(
   enabledCommands: { name: string; category: string }[],
   ownerNumbers: string[]
 ): string {
-  const p = bot.prefix || "!";
+  const p = (bot.prefix || "!").trim();
   const statusMap: Record<string, string> = {
     online: "Online",
     connecting: "Connecting",
@@ -235,35 +235,35 @@ export function buildMenu(
     byCat.set(cmd.category, list);
   }
   const L: string[] = [];
-  L.push("💧 WATER AI");
+  L.push("*💧 WATER AI CLOUD*");
   L.push("");
-  L.push(`👋 Hello, @${username}`);
+  L.push(`👋 Halo, @${username}`);
   L.push("");
-  L.push("🤖 Advanced WhatsApp AI Assistant");
-  L.push("⚡ Fast • Stable • Powerful");
+  L.push("_Advanced WhatsApp AI Assistant_");
+  L.push("_Fast • Stable • Powerful_");
   L.push("");
-  L.push("╭─「 BOT INFO 」");
+  L.push("╭─「 *BOT INFO* 」");
   L.push("│");
-  L.push(`│ ◦ Prefix : ${p}`);
-  L.push(`│ ◦ Version : ${BOT_VERSION}`);
-  L.push(`│ ◦ Status : ${statusMap[bot.status] ?? bot.status}`);
-  L.push(`│ ◦ Owner : ${ownerNumbers[0] ?? bot.ownerNumber ?? "-"}`);
+  L.push(`│ ◦ *Prefix* : ${p}`);
+  L.push(`│ ◦ *Version* : ${BOT_VERSION}`);
+  L.push(`│ ◦ *Status* : ${statusMap[bot.status] ?? bot.status}`);
+  L.push(`│ ◦ *Owner* : ${ownerNumbers[0] ?? bot.ownerNumber ?? "-"}`);
   L.push("│");
   L.push("╰────────────────────");
   for (const cat of CATEGORIES) {
     const cmds = byCat.get(cat.id);
     if (!cmds || !cmds.length) continue;
     L.push("");
-    L.push(`╭─「 ${cat.emoji} ${cat.label} 」`);
+    L.push(`╭─「 *${cat.emoji} ${cat.label}* 」`);
     L.push("│");
-    for (const cmd of cmds) L.push(`│ ${cmd}`);
+    for (const cmd of cmds) L.push(`│ ◦ *${cmd}*`);
     L.push("│");
     L.push("╰────────────────────");
   }
   L.push("");
   L.push("━━━━━━━━━━━━━━━━━━━━");
-  L.push("💧 WATER AI");
-  L.push("Powerful • Fast • Modern");
+  L.push("*💧 WATER AI CLOUD*");
+  L.push("_Powerful • Fast • Modern_");
   L.push("━━━━━━━━━━━━━━━━━━━━");
   return L.join("\n");
 }

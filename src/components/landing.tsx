@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Icon, fmtNum, Badge } from "./ui";
 import { Logo } from "./logo";
 
@@ -148,6 +148,8 @@ export function LiveStats({ initial }: { initial: Stats }) {
 function Meter({ label, value, delay }: { label: string; value: number; delay: number }) {
   const [w, setW] = useState(value);
   useEffect(() => {
+    // Synchronise the visual meter when its server-provided baseline changes.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setW(value);
     const t = setInterval(() => {
       setW((v) => Math.min(92, Math.max(12, v + (Math.random() * 10 - 5))));
@@ -171,7 +173,7 @@ function Meter({ label, value, delay }: { label: string; value: number; delay: n
 }
 
 export function HeroPreview({ stats }: { stats: Stats }) {
-  const bars = useRef([34, 52, 41, 66, 48, 72, 58, 81, 63, 90, 71, 84]).current;
+  const bars = [34, 52, 41, 66, 48, 72, 58, 81, 63, 90, 71, 84];
   const connected = stats.onlineConnections > 0;
   return (
     <div className="relative anim-float">

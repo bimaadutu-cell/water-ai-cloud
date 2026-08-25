@@ -130,7 +130,7 @@ export default function ApiKeysPage() {
         <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-5">
           <div className="mb-2 flex items-center gap-2 text-emerald-300">
             <Icon name="check" size={16} />
-            <p className="text-xs font-bold">API key "{freshKey.name}" berhasil dibuat</p>
+            <p className="text-xs font-bold">API key &quot;{freshKey.name}&quot; berhasil dibuat</p>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <code className="flex-1 break-all rounded-xl bg-ink-950 px-4 py-3 font-mono text-xs text-emerald-300">

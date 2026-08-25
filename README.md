@@ -12,7 +12,8 @@ AI integration, dashboard real-time (SSE), billing, admin panel, dan PWA.
 |---|---|
 | Frontend | Next.js (App Router) + React + TypeScript + Tailwind CSS v4 |
 | Backend | Node.js REST API (route handlers) + SSE realtime |
-| Bot engine | `@whiskeysockets/baileys` v7 (multi-device, per-bot auth state di disk) |
+| Bot engine | `@whiskeysockets/baileys` v6 (multi-device, per-bot auth state di disk) |
+| Downloader | Binary `yt-dlp` resmi + `ffmpeg` (extractor publik) |
 | Database | PostgreSQL + Drizzle ORM |
 | Validasi | Zod |
 | Realtime | Server-Sent Events (tanpa polling berlebihan) |
@@ -27,6 +28,7 @@ AI integration, dashboard real-time (SSE), billing, admin panel, dan PWA.
    - `APP_URL` — domain publik Railway (mis. `https://water-ai-cloud-v2.up.railway.app`)
    - `ADMIN_INITIAL_PASSWORD` — (opsional) password awal akun admin; default `Water@2026`
    - `AI_API_KEY` — (opsional) untuk command AI
+   - Volume persisten yang dipasang ke `STORAGE_CONFIG` — wajib jika sesi WhatsApp harus bertahan setelah restart/deploy
 5. Deploy. **Setiap boot** server menjalankan `scripts/migrate.mjs` (auto-migrasi skema + seed admin/pricing, idempotent) sehingga:
    - kolom sisa versi lama (mis. `users.password`) dihapus otomatis
    - skema sinkron dengan `src/db/schema.ts`
@@ -68,7 +70,15 @@ Web (dashboard) → API → Auth → Bot Manager → WhatsApp Session (Baileys)
 2. Start bot → socket menyambung ke WhatsApp, QR asli ditampilkan (atau pairing code via `requestPairingCode`).
 3. Pesan masuk → dinormalisasi (text/reply/image/video/audio/document/sticker/location/contact/reaction/notification) → command handler (prefix, permission owner/admin) → automation (keyword, auto reply, welcome, goodbye, anti-link, scheduled, AI reply) → log + webhook + SSE.
 4. Disconnect → status `RECONNECTING` + exponential backoff (1.5s×2ⁿ, maks 8x → `ERROR`, tanpa infinite loop).
-5. Stop bot A tidak memengaruhi bot B (instance terpisah).
+5. Pairing code diminta dari socket WhatsApp yang sudah terbuka melalui `requestPairingCode`; tidak ada generator kode lokal, kode dummy, atau browser simulasi.
+6. Descriptor client yang dikirim Baileys adalah `Ubuntu / Chrome / 22.04.4`; Baileys tetap memakai WebSocket protokol WhatsApp, bukan menjalankan Chrome headless.
+7. Stop bot A tidak memengaruhi bot B (instance terpisah).
+
+## Downloader nyata
+
+Command `.play`/`.song`/`.audio` mengambil audio dan `.video`/`.media` mengambil video melalui binary `yt-dlp` resmi. Query judul diubah menjadi pencarian `ytsearch1`; URL publik YouTube, TikTok, Instagram, dan situs lain diproses melalui extractor yang tersedia pada versi yt-dlp yang terpasang. `ffmpeg` dipakai untuk menggabungkan atau mengonversi stream. Ukuran media dibatasi 50 MB. Media privat, media yang membutuhkan login, playlist, dan bypass proteksi tidak diproses.
+
+Pada image Docker, binary di-install ke `/usr/local/bin/yt-dlp` dan `ffmpeg` di-install dari Alpine. Untuk instalasi lokal, pasang `yt-dlp` serta `ffmpeg`, lalu atur `YTDLP_PATH` bila binary tidak berada di `PATH`. Engine tidak mengklaim sukses bila extractor gagal; bot mengirim pesan error yang sebenarnya.
 
 ## REST API (Gateway v1)
 
