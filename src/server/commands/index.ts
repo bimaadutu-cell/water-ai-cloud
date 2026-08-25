@@ -141,6 +141,9 @@ const H: Record<string, Handler> = {
   song: dl.song,
   audio: dl.audioCmd,
   video: dl.video,
+  tiktok: dl.tiktok,
+  instagram: dl.instagram,
+  youtube: dl.youtube,
   media: dl.media,
 
   /* 👥 GROUP */

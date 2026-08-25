@@ -5,7 +5,7 @@ import sharp from "sharp";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
-import { CmdCtx, CmdResult, box, truncate, safeFetch, withTempFile, ffmpegPath, sanitizeFilename, CmdError } from "./core";
+import { CmdCtx, CmdResult, box, truncate, safeFetch, withTempFile, ffmpegPath, sanitizeFilename, CmdError, progress } from "./core";
 
 const pExecFile = promisify(execFile);
 const FF = ffmpegPath();
@@ -93,29 +93,43 @@ export async function randomsticker(ctx: CmdCtx): Promise<CmdResult> {
 function bratSvg(text: string, frame = 0): Buffer {
   const clean = text.trim().slice(0, 180) || "BRAT";
   const lines = clean.split(/\s+/).flatMap((line) => line.match(/.{1,16}/g) ?? [line]).slice(0, 5);
-  const y0 = 170 + (frame % 2) * 10;
+  const y0 = 184 + (frame % 2) * 7;
   const linesSvg = lines.map((line, i) => `<text x="240" y="${y0 + i * 66}" text-anchor="middle">${svgEscape(line.toUpperCase())}</text>`).join("");
-  return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="480" height="480"><defs><linearGradient id="g" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#ff5da2"/><stop offset="1" stop-color="#7c3aed"/></linearGradient></defs><rect width="480" height="480" rx="64" fill="url(#g)"/><circle cx="80" cy="80" r="35" fill="#fff" opacity=".18"/><circle cx="410" cy="390" r="55" fill="#fff" opacity=".12"/><style>text{font-family:Impact,Arial,sans-serif;font-size:52px;font-weight:900;fill:#fff;stroke:#111827;stroke-width:7px;paint-order:stroke;letter-spacing:1px}</style>${linesSvg}<text x="240" y="430" text-anchor="middle" font-family="Arial" font-size="24" font-weight="bold" fill="#fff">WATER AI • BRAT</text></svg>`);
+  return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="480" height="480"><rect width="480" height="480" fill="#ffffff"/><style>text{font-family:Impact,Arial,sans-serif;font-size:52px;font-weight:900;fill:#111111;stroke:#111111;stroke-width:0;letter-spacing:1px}</style>${linesSvg}</svg>`);
 }
 
 /** BRAT is intentionally a deterministic local text sticker; it never calls an AI service. */
 export async function brat(ctx: CmdCtx): Promise<CmdResult> {
   if (!ctx.arg.trim()) return { text: `Pakai: ${ctx.bot.prefix}brat <teks> — menghasilkan sticker BRAT WebP tanpa AI.` };
-  const png = await sharp(bratSvg(ctx.arg)).png().toBuffer();
-  const webp = await makeSticker(png, ctx);
-  return { media: { kind: "sticker", buffer: webp, mimetype: "image/webp" } };
+  const key = await progress(ctx.sock, ctx.n.remoteJid, null, "⌛ Membuat sticker BRAT WebP...");
+  try {
+    const png = await sharp(bratSvg(ctx.arg)).png().toBuffer();
+    const webp = await makeSticker(png, ctx);
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "✅ Sticker BRAT selesai dibuat.");
+    return { media: { kind: "sticker", buffer: webp, mimetype: "image/webp" } };
+  } catch (error: any) {
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🥀 Sticker BRAT gagal dibuat.");
+    throw new CmdError(`🥀 Gagal membuat sticker BRAT: ${String(error?.message || "renderer gagal").slice(0, 180)}`);
+  }
 }
 
 async function bratAnimated(ctx: CmdCtx, mode: "gif" | "vid"): Promise<CmdResult> {
   if (!ctx.arg.trim()) return { text: `Pakai: ${ctx.bot.prefix}brat${mode === "gif" ? "gif" : "vid"} <teks> — animated sticker WebP tanpa AI.` };
-  const out = await withTempFile(await sharp(bratSvg(ctx.arg, 0)).png().toBuffer(), ".png", async (inPath) => {
+  const key = await progress(ctx.sock, ctx.n.remoteJid, null, "⌛ Membuat animated BRAT WebP...");
+  try {
+    const out = await withTempFile(await sharp(bratSvg(ctx.arg, 0)).png().toBuffer(), ".png", async (inPath) => {
     const outPath = `${inPath}.${mode}.webp`;
     await ffmpeg(["-loop", "1", "-i", inPath, "-t", "3", "-vf", "scale=480:480:force_original_aspect_ratio=decrease,pad=480:480:(ow-iw)/2:(oh-ih)/2,zoompan=z='min(zoom+0.0015,1.18)':d=75:s=480x480:fps=25,format=yuva420p", "-an", "-c:v", "libwebp", "-lossless", "0", "-q:v", "70", "-loop", "0", outPath], 120000);
     return outPath;
   });
-  const buffer = fs.readFileSync(out);
-  fs.rmSync(out, { force: true });
-  return { media: { kind: "sticker", buffer, mimetype: "image/webp" } };
+    const buffer = fs.readFileSync(out);
+    fs.rmSync(out, { force: true });
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "✅ Animated BRAT selesai dibuat.");
+    return { media: { kind: "sticker", buffer, mimetype: "image/webp" } };
+  } catch (error: any) {
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🥀 Animated BRAT gagal dibuat.");
+    throw new CmdError(`🥀 Gagal membuat animated BRAT: ${String(error?.message || "renderer gagal").slice(0, 180)}`);
+  }
 }
 
 export const bratgif = (ctx: CmdCtx) => bratAnimated(ctx, "gif");

@@ -129,6 +129,9 @@ export const REGISTRY: RegistryCommand[] = [
   c("song", "downloader", "Alias .play (audio)"),
   c("audio", "downloader", "Alias .play (audio)"),
   c("video", "downloader", "Download video otomatis: .video <judul/url>"),
+  c("tiktok", "downloader", "Download TikTok publik: .tiktok <URL>"),
+  c("instagram", "downloader", "Download Instagram publik: .instagram <URL>"),
+  c("youtube", "downloader", "Download YouTube publik: .youtube <URL/judul>"),
   c("media", "downloader", "Download media umum: .media <judul/url>"),
 
   /* 👥 GROUP — real Baileys group APIs */

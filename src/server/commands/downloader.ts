@@ -42,6 +42,7 @@ interface DownloadedMedia {
   mimetype: string;
   info: ExtractedInfo;
   thumbnail?: Buffer;
+  engine: string;
 }
 
 function sourceFor(arg: string): string {
@@ -60,15 +61,15 @@ function displayError(error: any): string {
     .replace(/\s+/g, " ")
     .trim();
   if (error?.code === "ENOENT") {
-    return "⚠️ Engine downloader belum terpasang. Install yt-dlp dan set YTDLP_PATH bila binary tidak ada di PATH.";
+    return "🥀 Engine downloader belum terpasang. Install yt-dlp dan set YTDLP_PATH bila binary tidak ada di PATH.";
   }
   if (/login|sign in|private|authentication|members only/i.test(message)) {
-    return "⚠️ Media ini membutuhkan login atau bersifat privat. Bot hanya memproses media publik tanpa bypass akses.";
+    return "🥀 Media ini membutuhkan login atau bersifat privat. Bot hanya memproses media publik tanpa bypass akses.";
   }
   if (/unsupported|no suitable extractor/i.test(message)) {
-    return "❌ Situs atau URL ini belum didukung extractor yt-dlp.";
+    return "🥀 Situs atau URL ini belum didukung extractor yt-dlp.";
   }
-  return `❌ Downloader gagal memproses media${message ? `: ${message.slice(0, 260)}` : "."}`;
+  return `🥀 Downloader gagal memproses media${message ? `: ${message.slice(0, 260)}` : "."}`;
 }
 
 async function runYtDlp(args: string[], timeout = COMMAND_TIMEOUT_MS): Promise<{ stdout: string; stderr: string }> {
@@ -169,6 +170,7 @@ async function downloadWithCobalt(url: string, mode: "audio" | "video", info: Ex
     filename: fileName.includes(".") ? fileName : `${fileName}.${mode === "audio" ? "mp3" : "mp4"}`,
     mimetype: mode === "audio" ? "audio/mpeg" : "video/mp4",
     info,
+    engine: "Cobalt self-hosted",
   };
 }
 
@@ -196,7 +198,7 @@ async function downloadWithYtDlp(source: string, mode: "audio" | "video", info: 
       args = commonArgs(outputTemplate, source).slice(0, -1);
       args.push(
         "--format",
-        "bv*[ext=mp4][height<=720]+ba[ext=m4a]/bv*[height<=720]+ba/b[ext=mp4][height<=720]/b[height<=720]",
+        "bv*[height<=720]+ba/b[height<=720]/bv*+ba/best",
         "--merge-output-format",
         "mp4",
         "--recode-video",
@@ -230,6 +232,7 @@ async function downloadWithYtDlp(source: string, mode: "audio" | "video", info: 
       mimetype: mode === "audio" ? "audio/mpeg" : "video/mp4",
       info,
       thumbnail,
+      engine: "yt-dlp extractor resmi",
     };
   } finally {
     await fs.promises.rm(workDir, { recursive: true, force: true }).catch(() => {});
@@ -249,7 +252,7 @@ function mediaCaption(media: DownloadedMedia, mode: "audio" | "video"): string {
     `⏱️ Duration : ${durationText(media.info.durationSec)}`,
     `📦 Format : ${media.mimetype}`,
     `📁 Size : ${(media.buffer.length / 1048576).toFixed(2)} MB`,
-    "📡 Engine : yt-dlp extractor resmi",
+    `📡 Engine : ${media.engine}`,
   ]);
 }
 
@@ -259,7 +262,7 @@ async function downloadCommand(ctx: CmdCtx, mode: "audio" | "video"): Promise<Cm
     return { text: mode === "audio" ? `Pakai: ${ctx.bot.prefix}play <judul lagu atau URL>` : `Pakai: ${ctx.bot.prefix}video <judul atau URL>` };
   }
 
-  const key = await progress(ctx.sock, ctx.n.remoteJid, null, `🔎 Mencari media dengan yt-dlp...\nQuery: ${arg.slice(0, 80)}`);
+  const key = await progress(ctx.sock, ctx.n.remoteJid, null, `⬇️ Mencari media dengan yt-dlp...\nQuery: ${arg.slice(0, 80)}`);
   try {
     const source = sourceFor(arg);
     let info: ExtractedInfo;
@@ -286,7 +289,7 @@ async function downloadCommand(ctx: CmdCtx, mode: "audio" | "video"): Promise<Cm
       },
     };
   } catch (error: any) {
-    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "❌ Downloader gagal.");
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🥀 Downloader gagal.");
     if (error instanceof CmdError) throw error;
     throw new CmdError(displayError(error));
   }
@@ -302,6 +305,10 @@ export const audioCmd = play;
 export async function video(ctx: CmdCtx): Promise<CmdResult> {
   return downloadCommand(ctx, "video");
 }
+
+export const tiktok = video;
+export const instagram = video;
+export const youtube = video;
 
 export async function media(ctx: CmdCtx): Promise<CmdResult> {
   const arg = ctx.arg.trim();

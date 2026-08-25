@@ -83,7 +83,7 @@ Pada image Docker Bookworm, binary di-install ke `/usr/local/bin/yt-dlp`, Python
 
 ## BRAT dan sticker lokal tanpa AI
 
-`.brat teks` membuat sticker WebP lokal dengan renderer SVG/Sharp dan tidak memanggil AI. `.bratgif teks`, `.bratvideo teks`, dan `.bratvid teks` membuat animated WebP sticker 3 detik menggunakan FFmpeg. `.bratsticker` membuat variasi teks BRAT lokal. Semua command membutuhkan argumen teks dan akan mengirim petunjuk penggunaan jika argumen kosong.
+`.brat teks` membuat sticker WebP lokal dengan latar putih dan teks hitam tebal melalui SVG/Sharp, tanpa watermark dan tanpa memanggil AI. `.bratgif teks`, `.bratvideo teks`, dan `.bratvid teks` membuat animated WebP sticker 3 detik menggunakan FFmpeg; yang bergerak hanya teksnya. `.bratsticker` membuat variasi teks BRAT lokal. Semua command membutuhkan argumen teks, menampilkan status `⌛` lalu `✅`, dan mengirim petunjuk penggunaan jika argumen kosong.
 
 ## REST API (Gateway v1)
 

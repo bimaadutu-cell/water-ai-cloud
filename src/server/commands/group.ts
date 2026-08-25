@@ -11,7 +11,7 @@ import {
   automations,
   logs,
 } from "@/db/schema";
-import { CmdCtx, CmdResult, box, truncate, isPremium } from "./core";
+import { CmdCtx, CmdResult, box, truncate, isPremium, progress, MAX_FILE_BYTES, CmdError } from "./core";
 import { clearAllGames } from "./state";
 
 /* ------------------------------ group utils ----------------------------- */
@@ -49,25 +49,30 @@ export async function swgc(ctx: CmdCtx): Promise<CmdResult> {
   const arg = ctx.arg.trim();
   const quoted = await ctx.getRepliedMedia();
   if (!arg && !quoted) return { text: `Pakai: reply media lalu ketik ${ctx.bot.prefix}swgc [caption], atau ${ctx.bot.prefix}swgc <teks>` };
+  const progressKey = await progress(ctx.sock, ctx.n.remoteJid, null, "⌛ Mempublikasikan ke WhatsApp Status...");
   try {
     const meta: any = await ctx.sock.groupMetadata(ctx.n.remoteJid);
     const subject = String(meta.subject || "Grup");
+    const statusJidList = (meta.participants ?? []).map((p: any) => p.id).filter((id: any) => typeof id === "string" && id.includes("@"));
     if (quoted) {
+      if (quoted.buffer.length > MAX_FILE_BYTES) throw new CmdError("🥀 Media status melebihi batas 50 MB.");
       const caption = arg || `Dibagikan dari grup ${subject}`;
-      const payload = quoted.mimetype.startsWith("image/")
-        ? { image: quoted.buffer, caption }
+      const payload: any = quoted.mimetype.startsWith("image/")
+        ? { image: quoted.buffer, mimetype: quoted.mimetype, caption }
         : quoted.mimetype.startsWith("video/")
-          ? { video: quoted.buffer, caption }
+          ? { video: quoted.buffer, mimetype: quoted.mimetype, caption }
           : quoted.mimetype.startsWith("audio/")
             ? { audio: quoted.buffer, mimetype: quoted.mimetype, ptt: false }
             : { document: quoted.buffer, mimetype: quoted.mimetype, fileName: "group-status.bin", caption };
-      await ctx.sock.sendMessage(statusJid, payload);
+      await ctx.sock.sendMessage(statusJid, payload, { statusJidList });
     } else {
-      await ctx.sock.sendMessage(statusJid, { text: `*${subject}*\n\n${arg}` });
+      await ctx.sock.sendMessage(statusJid, { text: `*${subject}*\n\n${arg}` }, { statusJidList });
     }
+    if (progressKey) await progress(ctx.sock, ctx.n.remoteJid, progressKey, "✅ Foto/video berhasil dipublikasikan ke WhatsApp Status.");
     return { text: "✅ Berhasil dipublikasikan ke WhatsApp Status." };
   } catch (error: any) {
-    return { text: `❌ Gagal membuat status: ${String(error?.message || "bot belum memiliki akses status").slice(0, 220)}` };
+    if (progressKey) await progress(ctx.sock, ctx.n.remoteJid, progressKey, "🥀 Gagal mempublikasikan ke WhatsApp Status.");
+    return { text: `🥀 Gagal membuat status: ${String(error?.message || "bot belum memiliki akses status").slice(0, 220)}` };
   }
 }
 

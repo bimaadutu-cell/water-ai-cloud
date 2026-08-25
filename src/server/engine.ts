@@ -893,7 +893,7 @@ async function handleIncoming(rb: RunningBot, bot: BotRow, m: any) {
           });
         } catch (e: any) {
           const em = String(e?.message ?? "");
-          await sendInternal(rb, n.remoteJid, /^[⚠❌💎📦⏱]/.test(em) ? em : "❌ Gagal memproses command. Coba lagi.");
+          await sendInternal(rb, n.remoteJid, /^[⚠❌🥀💎📦⏱]/.test(em) ? em : "🥀 Gagal memproses command. Coba lagi.");
           await addLog({
             userId: bot.userId,
             botId: bot.id,
