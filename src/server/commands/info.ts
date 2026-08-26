@@ -1,5 +1,7 @@
 /* INFORMATION + TOOLS + PREMIUM + FUN — all real implementations. */
 import { randomUUID, createHash } from "crypto";
+import fs from "fs";
+import path from "path";
 import { eq, and, desc, sql, isNull, gte } from "drizzle-orm";
 import { db } from "@/db";
 import {
@@ -135,15 +137,21 @@ async function renderMenu(ctx: CmdCtx, full: boolean): Promise<CmdResult> {
   const name = (ctx.raw?.pushName as string) || "user";
   const text = buildMenu(ctx.bot, name, rows, [ctx.bot.ownerNumber ?? "", ...owners.map((o) => o.phone)].filter(Boolean), full);
   const menuPhotoUrl = String((ctx.bot.settings as any)?.menuPhotoUrl ?? "").trim();
-  if (!/^https?:\/\//i.test(menuPhotoUrl)) return { text };
+  let buffer: Buffer | null = null;
+  if (/^https?:\/\//i.test(menuPhotoUrl)) {
+    try { buffer = await safeFetch(menuPhotoUrl, 8 * 1024 * 1024); } catch { buffer = null; }
+  }
+  if (!buffer) {
+    try { buffer = await fs.promises.readFile(path.join(process.cwd(), "public", "menu-water-ai-cloud.png")); } catch { buffer = null; }
+  }
+  if (!buffer) return { text: `${text}\\n\\n🥀 Foto menu tidak tersedia; menu teks tetap ditampilkan.` };
   try {
-    const buffer = await safeFetch(menuPhotoUrl, 8 * 1024 * 1024);
     const ft = await import("file-type");
     const detected = await ft.fileTypeFromBuffer(buffer);
-    if (!detected?.mime.startsWith("image/")) throw new Error("URL bukan gambar");
+    if (!detected?.mime.startsWith("image/")) throw new Error("Aset bukan gambar");
     return { media: { kind: "image", buffer, mimetype: detected.mime, caption: text } };
   } catch {
-    return { text: `${text}\\n\\n🥀 Foto menu tidak dapat dimuat; menu teks tetap ditampilkan.` };
+    return { text: `${text}\\n\\n🥀 Foto menu tidak valid; menu teks tetap ditampilkan.` };
   }
 }
 

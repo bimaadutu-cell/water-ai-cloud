@@ -125,19 +125,13 @@ function wrapBratText(value: string, maxGraphemes = 15): string[] {
 
 function bratSvg(text: string, frame = 0): Buffer {
   const clean = text.trim().slice(0, 220) || "BRAT";
-  const lines = wrapBratText(clean);
-  const y0 = 126 + (frame % 2) * 2;
-  const gap = lines.length > 1 ? Math.min(76, Math.floor(270 / lines.length)) : 0;
-  const linesSvg = lines.map((line, i) => {
-    const y = y0 + i * gap;
-    const count = Math.max(1, graphemes(line).length);
-    const fontSize = Math.max(30, Math.min(58, Math.floor(410 / (count + 1))));
-    const pillWidth = Math.min(436, Math.max(168, count * Math.max(18, fontSize * 0.72) + 48));
-    const pillX = (480 - pillWidth) / 2;
-    const pillY = y - fontSize + 8;
-    return `<rect x="${pillX.toFixed(1)}" y="${pillY.toFixed(1)}" width="${pillWidth.toFixed(1)}" height="${(fontSize + 28).toFixed(1)}" rx="${Math.min(26, fontSize / 2)}" fill="#fbfbfb" stroke="#111111" stroke-width="3"/><text x="240" y="${y}" font-size="${fontSize}" text-anchor="middle" textLength="${Math.max(90, pillWidth - 32)}" lengthAdjust="spacingAndGlyphs">${svgEscape(line.toUpperCase())}</text>`;
-  }).join("");
-  return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="480" height="480" viewBox="0 0 480 480"><defs><filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="3" stdDeviation="2" flood-color="#000000" flood-opacity="0.14"/></filter></defs><style>text{font-family:"Noto Sans","Noto Color Emoji","DejaVu Sans",sans-serif;font-weight:900;fill:#111111;stroke:#111111;stroke-width:0;letter-spacing:0px}</style><rect width="480" height="480" fill="#ffffff"/><g filter="url(#shadow)">${linesSvg}</g></svg>`);
+  const lines = wrapBratText(clean, 14);
+  const longest = Math.max(1, ...lines.map((line) => graphemes(line).length));
+  const fontSize = Math.max(44, Math.min(74, Math.floor(520 / (longest + 2))));
+  const gap = lines.length > 1 ? Math.min(78, Math.floor(340 / lines.length)) : 0;
+  const startY = 240 - ((lines.length - 1) * gap) / 2 + fontSize * 0.35 + (frame % 2);
+  const linesSvg = lines.map((line, i) => `<text x="240" y="${(startY + i * gap).toFixed(1)}" font-size="${fontSize}" text-anchor="middle">${svgEscape(line.toUpperCase())}</text>`).join("");
+  return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="480" height="480" viewBox="0 0 480 480"><rect width="480" height="480" fill="#ffffff"/><style>text{font-family:"Noto Sans","Noto Color Emoji","DejaVu Sans",sans-serif;font-weight:900;fill:#111111;stroke:#111111;stroke-width:0;letter-spacing:0px}</style>${linesSvg}</svg>`);
 }
 
 /** BRAT is intentionally a deterministic local text sticker; it never calls an AI service. */
