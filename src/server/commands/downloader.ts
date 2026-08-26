@@ -174,6 +174,90 @@ async function downloadWithCobalt(url: string, mode: "audio" | "video", info: Ex
   };
 }
 
+function serviceCandidates(url: string): { name: string; page: string }[] {
+  const host = new URL(url).hostname.toLowerCase();
+  if (host.includes("tiktok.com") || host.includes("douyin.com")) return [
+    { name: "SnapTik.net", page: "https://snaptik.net/en" },
+    { name: "SnapTik.app", page: "https://snaptik.app" },
+  ];
+  if (host === "instagram.com" || host.endsWith(".instagram.com")) return [{ name: "Snap-Insta.to", page: "https://snap-insta.to/id" }];
+  return [];
+}
+
+function pageVar(page: string, key: string): string | undefined {
+  const match = page.match(new RegExp(`(?:var\\s+)?${key}\\s*=\\s*[\\"']([^\\"']+)`));
+  return match?.[1];
+}
+
+function mediaUrls(value: unknown): string[] {
+  const text = typeof value === "string" ? value : JSON.stringify(value ?? "");
+  const decoded = text.replaceAll("\\/", "/").replaceAll("&amp;", "&").replaceAll("\\u0026", "&");
+  const found = new Set<string>();
+  for (const match of decoded.matchAll(/https?:\/\/[^\s"'<>\\]+/gi)) {
+    const candidate = match[0].replace(/[),.;]+$/, "");
+    if (!/^https?:\/\//i.test(candidate)) continue;
+    if (/\.(?:mp4|webm|mov|m4v|jpg|jpeg|png|webp)(?:[?#]|$)/i.test(candidate) || /(?:cdn|download|media|video|image)/i.test(candidate)) found.add(candidate);
+  }
+  return [...found].sort((a, b) => {
+    const score = (value: string) => {
+      let result = 0;
+      if (/\.(?:mp4|webm|mov|m4v)(?:[?#]|$)/i.test(value)) result += 10;
+      if (/(?:download|video|stream|play)/i.test(value)) result += 5;
+      if (/(?:snapcdn|\/get\?)/i.test(value)) result += 8;
+      if (/\.(?:jpg|jpeg|png|webp)(?:[?#]|$)/i.test(value)) result -= 2;
+      return result;
+    };
+    return score(b) - score(a);
+  });
+}
+
+async function downloadFromWebService(url: string, mode: "audio" | "video", info: ExtractedInfo, candidate: { name: string; page: string }): Promise<DownloadedMedia> {
+  const pageResponse = await fetch(candidate.page, { signal: AbortSignal.timeout(20000), headers: { "User-Agent": "Mozilla/5.0 (compatible; WaterAICloud/1.0)" } });
+  if (!pageResponse.ok) throw new CmdError(`${candidate.name} tidak tersedia (HTTP ${pageResponse.status}).`);
+  const page = await pageResponse.text();
+  const endpoint = pageVar(page, "k_url_search") || "/api/ajaxSearch";
+  const token = pageVar(page, "k_token");
+  const exp = pageVar(page, "k_exp");
+  if (!token || !exp) throw new CmdError(`${candidate.name} tidak memberikan token request.`);
+  const form = new URLSearchParams({ k_exp: exp, k_token: token, q: url, t: "video", lang: pageVar(page, "k_lang") || "en", v: "v2", html: "" });
+  const response = await fetch(new URL(endpoint, candidate.page).toString(), {
+    method: "POST",
+    headers: { Accept: "application/json, text/javascript, */*; q=0.01", "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", "X-Requested-With": "XMLHttpRequest", Referer: candidate.page, "User-Agent": "Mozilla/5.0 (compatible; WaterAICloud/1.0)" },
+    body: form,
+    signal: AbortSignal.timeout(90000),
+  });
+  const raw = await response.text();
+  if (!response.ok) throw new CmdError(`${candidate.name} gagal memproses URL (HTTP ${response.status}).`);
+  let parsed: unknown = raw;
+  try { parsed = JSON.parse(raw); } catch { /* hasil bisa berupa HTML/JS */ }
+  const urls = mediaUrls(parsed);
+  if (!urls.length) throw new CmdError(`${candidate.name} tidak mengembalikan URL media; kemungkinan token kedaluwarsa, CAPTCHA, atau struktur berubah.`);
+  let lastError = "";
+  for (const direct of urls.slice(0, 8)) {
+    try {
+      const buffer = await safeFetch(direct, MAX_FILE_BYTES);
+      const detected = await (await import("file-type")).fileTypeFromBuffer(buffer);
+      const audio = detected?.mime.startsWith("audio/") || /\.(?:mp3|m4a|ogg)(?:[?#]|$)/i.test(direct);
+      const video = detected?.mime.startsWith("video/") || /\.(?:mp4|webm|mov|m4v)(?:[?#]|$)/i.test(direct);
+      const image = detected?.mime.startsWith("image/");
+      if (mode === "audio" && !audio) continue;
+      if (mode === "video" && !video && !image) continue;
+      const ext = detected?.ext || (audio ? "mp3" : image ? "jpg" : "mp4");
+      return { buffer, filename: `${sanitizeFilename(info.title)}.${ext}`, mimetype: detected?.mime || (audio ? "audio/mpeg" : image ? "image/jpeg" : "video/mp4"), info, engine: candidate.name };
+    } catch (error: any) { lastError = String(error?.message || error); }
+  }
+  throw new CmdError(`${candidate.name} menemukan URL tetapi media tidak dapat diambil${lastError ? `: ${lastError.slice(0, 160)}` : "."}`);
+}
+
+async function downloadWithWebServices(url: string, mode: "audio" | "video", info: ExtractedInfo): Promise<DownloadedMedia> {
+  const errors: string[] = [];
+  for (const candidate of serviceCandidates(url)) {
+    try { return await downloadFromWebService(url, mode, info, candidate); }
+    catch (error: any) { errors.push(`${candidate.name}: ${String(error?.message || error).replace(/^🥀\\s*/, "")}`); }
+  }
+  throw new CmdError(`🥀 Semua web engine gagal. ${errors.join(" | ")}`);
+}
+
 async function downloadWithYtDlp(source: string, mode: "audio" | "video", info: ExtractedInfo): Promise<DownloadedMedia> {
   const workDir = await fs.promises.mkdtemp(path.join(tmpDir, "ytdlp-"));
   const outputTemplate = path.join(workDir, "download.%(ext)s");
@@ -262,20 +346,38 @@ async function downloadCommand(ctx: CmdCtx, mode: "audio" | "video"): Promise<Cm
     return { text: mode === "audio" ? `Pakai: ${ctx.bot.prefix}play <judul lagu atau URL>` : `Pakai: ${ctx.bot.prefix}video <judul atau URL>` };
   }
 
-  const key = await progress(ctx.sock, ctx.n.remoteJid, null, `⬇️ Mencari media dengan yt-dlp...\nQuery: ${arg.slice(0, 80)}`);
+  const key = await progress(ctx.sock, ctx.n.remoteJid, null, `⬇️ Mencari media dengan engine resmi...\nQuery: ${arg.slice(0, 80)}`);
   try {
     const source = sourceFor(arg);
     let info: ExtractedInfo;
     let media: DownloadedMedia;
-    try {
-      info = await extractInfo(source);
-      if (key) await progress(ctx.sock, ctx.n.remoteJid, key, `⬇️ Mengunduh ${mode === "audio" ? "audio" : "video"} nyata...\\n${info.title.slice(0, 80)}`);
-      media = await downloadWithYtDlp(source, mode, info);
-    } catch (primaryError) {
-      if (!/^https?:\/\//i.test(arg) || !process.env.COBALT_API_URL?.trim()) throw primaryError;
+    if (/^https?:\/\//i.test(arg) && serviceCandidates(arg).length) {
       info = { title: `Media ${new URL(arg).hostname}`, webpageUrl: arg };
-      if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🔁 Extractor utama ditolak sumber. Mencoba fallback media yang dikonfigurasi...");
-      media = await downloadWithCobalt(arg, mode, info);
+      try {
+        if (key) await progress(ctx.sock, ctx.n.remoteJid, key, `⬇️ Memproses ${new URL(arg).hostname} dengan engine web...`);
+        media = await downloadWithWebServices(arg, mode, info);
+      } catch (webError) {
+        if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🔁 Engine web gagal. Mencoba yt-dlp extractor resmi...");
+        try {
+          info = await extractInfo(source);
+          media = await downloadWithYtDlp(source, mode, info);
+        } catch (primaryError) {
+          if (!process.env.COBALT_API_URL?.trim()) throw webError;
+          if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🔁 Extractor utama gagal. Mencoba fallback media yang dikonfigurasi...");
+          media = await downloadWithCobalt(arg, mode, info);
+        }
+      }
+    } else {
+      try {
+        info = await extractInfo(source);
+        if (key) await progress(ctx.sock, ctx.n.remoteJid, key, `⬇️ Mengunduh ${mode === "audio" ? "audio" : "video"} nyata...\\n${info.title.slice(0, 80)}`);
+        media = await downloadWithYtDlp(source, mode, info);
+      } catch (primaryError) {
+        if (!/^https?:\/\//i.test(arg) || !process.env.COBALT_API_URL?.trim()) throw primaryError;
+        info = { title: `Media ${new URL(arg).hostname}`, webpageUrl: arg };
+        if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🔁 Extractor utama ditolak sumber. Mencoba fallback media yang dikonfigurasi...");
+        media = await downloadWithCobalt(arg, mode, info);
+      }
     }
     if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "✅ Selesai. Mengirim media...");
     return {
