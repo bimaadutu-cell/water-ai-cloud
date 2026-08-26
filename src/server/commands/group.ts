@@ -64,9 +64,11 @@ export async function swgc(ctx: CmdCtx): Promise<CmdResult> {
           : quoted.mimetype.startsWith("audio/")
             ? { audio: quoted.buffer, mimetype: quoted.mimetype, ptt: false }
             : { document: quoted.buffer, mimetype: quoted.mimetype, fileName: "group-status.bin", caption };
-      await ctx.sock.sendMessage(statusJid, payload, { statusJidList });
+      const sent = await ctx.sock.sendMessage(statusJid, payload, { statusJidList });
+      if (!sent?.key?.id) throw new CmdError("WhatsApp tidak mengonfirmasi publikasi status.");
     } else {
-      await ctx.sock.sendMessage(statusJid, { text: `*${subject}*\n\n${arg}` }, { statusJidList });
+      const sent = await ctx.sock.sendMessage(statusJid, { text: `*${subject}*\n\n${arg}` }, { statusJidList });
+      if (!sent?.key?.id) throw new CmdError("WhatsApp tidak mengonfirmasi publikasi status.");
     }
     if (progressKey) await progress(ctx.sock, ctx.n.remoteJid, progressKey, "✅ Foto/video berhasil dipublikasikan ke WhatsApp Status.");
     return { text: "✅ Berhasil dipublikasikan ke WhatsApp Status." };

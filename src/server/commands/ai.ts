@@ -7,11 +7,12 @@ async function aiChat(
   user: string,
   opts: { temperature?: number; maxTokens?: number; imageBase64?: string; imageMime?: string } = {}
 ): Promise<string> {
-  const key = process.env.AI_API_KEY;
+  const key = process.env.AI_API_KEY || process.env.GEMINI_API_KEY;
   if (!key)
-    return "⚠️ AI belum dikonfigurasi di server (AI_API_KEY belum diset). Fitur ini aktif setelah key dipasang — bukan simulasi.";
-  const base = process.env.AI_BASE_URL || "https://api.openai.com/v1";
-  const model = process.env.AI_MODEL || "gpt-4o-mini";
+    return "⚠️ AI belum dikonfigurasi di server (AI_API_KEY atau GEMINI_API_KEY belum diset). Fitur ini aktif setelah key dipasang — bukan simulasi.";
+  const usingGemini = !process.env.AI_API_KEY && !!process.env.GEMINI_API_KEY;
+  const base = process.env.AI_BASE_URL || (usingGemini ? "https://generativelanguage.googleapis.com/v1beta/openai" : "https://api.openai.com/v1");
+  const model = process.env.AI_MODEL || (usingGemini ? "gemini-2.5-flash-lite" : "gpt-4o-mini");
   const messages: any[] = [{ role: "system", content: system }];
   if (opts.imageBase64) {
     messages.push({

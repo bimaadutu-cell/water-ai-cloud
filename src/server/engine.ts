@@ -613,15 +613,38 @@ interface NormalizedMsg {
 
 function unwrapMessage(message: any): any {
   let current = message || {};
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 8; i++) {
     const next = current?.viewOnceMessage?.message
       ?? current?.viewOnceMessageV2?.message
       ?? current?.viewOnceMessageV2Extension?.message
-      ?? current?.ephemeralMessage?.message;
+      ?? current?.ephemeralMessage?.message
+      ?? current?.documentWithCaptionMessage?.message;
     if (!next) break;
     current = next;
   }
   return current;
+}
+
+/** Extract command text from every Baileys message shape in one place. */
+export function extractMessageText(message: any): string {
+  const msg = unwrapMessage(message);
+  const direct = [
+    msg?.conversation,
+    msg?.extendedTextMessage?.text,
+    msg?.imageMessage?.caption,
+    msg?.videoMessage?.caption,
+    msg?.documentMessage?.caption,
+    msg?.buttonsResponseMessage?.selectedButtonId,
+    msg?.listResponseMessage?.title,
+    msg?.templateButtonReplyMessage?.selectedId,
+    msg?.interactiveResponseMessage?.body?.text,
+    msg?.notificationMessage?.text,
+  ];
+  const found = direct.find((value) => typeof value === "string" && value.trim());
+  if (found) return String(found);
+  const quoted = msg?.extendedTextMessage?.contextInfo?.quotedMessage;
+  if (quoted) return extractMessageText(quoted);
+  return "";
 }
 
 function normalize(m: any): NormalizedMsg | null {
@@ -629,40 +652,23 @@ function normalize(m: any): NormalizedMsg | null {
   const remoteJid: string | undefined = key?.remoteJid;
   if (!remoteJid || remoteJid === "status@broadcast" || key?.fromMe) return null;
   const msg = unwrapMessage(m.message || {});
-  let type = "text";
-  let text = "";
-  if (typeof msg.conversation === "string") text = msg.conversation;
-  else if (msg.extendedTextMessage) {
-    type = msg.extendedTextMessage.contextInfo ? "reply" : "text";
-    text = msg.extendedTextMessage.text || "";
-  } else if (msg.imageMessage) {
-    type = "image";
-    text = msg.imageMessage.caption || "";
-  } else if (msg.videoMessage) {
-    type = "video";
-    text = msg.videoMessage.caption || "";
-  } else if (msg.audioMessage) type = "audio";
-  else if (msg.documentMessage) {
-    type = "document";
-    text = msg.documentMessage.caption || "";
-  } else if (msg.stickerMessage) type = "sticker";
-  else if (msg.locationMessage) type = "location";
-  else if (msg.contactMessage) type = "contact";
-  else if (msg.contactsMessage) type = "contacts";
-  else if (msg.reactionMessage) type = "reaction";
-  else if (msg.buttonsResponseMessage) {
-    type = "button";
-    text = msg.buttonsResponseMessage.selectedButtonId || "";
-  } else if (msg.listResponseMessage) {
-    type = "list";
-    text = msg.listResponseMessage.title || "";
-  } else if (msg.protocolMessage) type = "protocol";
-  else if (msg.notificationMessage) {
-    type = "notification";
-    text = msg.notificationMessage.text || "";
-  } else if (msg.pollUpdateMessage) type = "poll";
+  const text = extractMessageText(msg);
+  const type = msg?.extendedTextMessage ? (msg.extendedTextMessage.contextInfo?.quotedMessage ? "reply" : "text")
+    : msg?.imageMessage ? "image"
+    : msg?.videoMessage ? "video"
+    : msg?.audioMessage ? "audio"
+    : msg?.documentMessage ? "document"
+    : msg?.stickerMessage ? "sticker"
+    : msg?.locationMessage ? "location"
+    : msg?.contactMessage ? "contact"
+    : msg?.contactsArrayMessage ? "contacts"
+    : msg?.reactionMessage ? "reaction"
+    : msg?.buttonsResponseMessage ? "button"
+    : msg?.listResponseMessage ? "list"
+    : msg?.notificationMessage ? "notification"
+    : msg?.pollUpdateMessage ? "poll" : "text";
   const isGroup = remoteJid.endsWith("@g.us");
-  const sender: string = key?.participant || remoteJid;
+  const sender: string = key?.participant || key?.senderPn || remoteJid;
   return { type, text, sender, remoteJid, isGroup, messageId: key?.id || "" };
 }
 
@@ -680,6 +686,17 @@ export function normalizeJid(value: unknown): string {
   if (raw.endsWith("@g.us")) return raw;
   const phone = normalizePhoneNumber(raw);
   return phone ? `${phone}@s.whatsapp.net` : raw;
+}
+
+export function getSenderNumber(messageOrJid: any): string {
+  const key = messageOrJid?.key ?? messageOrJid;
+  return normalizePhoneNumber(key?.participant || key?.senderPn || key?.remoteJid || messageOrJid);
+}
+
+export function isOwner(senderJid: unknown, ownerNumbers: unknown[]): boolean {
+  const sender = normalizePhoneNumber(senderJid);
+  if (!sender) return false;
+  return ownerNumbers.some((owner) => normalizePhoneNumber(owner) === sender);
 }
 
 function participantIsAdmin(participant: any): boolean {
@@ -1061,7 +1078,13 @@ function makeCmdCtx(
   t0: number,
   cmd: any
 ): CmdCtx {
-  const contextInfo = m?.message?.extendedTextMessage?.contextInfo ?? {};
+  const root = unwrapMessage(m?.message || {});
+  const contextInfo = root?.extendedTextMessage?.contextInfo
+    ?? root?.imageMessage?.contextInfo
+    ?? root?.videoMessage?.contextInfo
+    ?? root?.documentMessage?.contextInfo
+    ?? root?.audioMessage?.contextInfo
+    ?? {};
   const quotedKey = contextInfo?.stanzaId ? {
     remoteJid: n.remoteJid,
     fromMe: false,

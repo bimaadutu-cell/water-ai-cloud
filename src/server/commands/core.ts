@@ -67,6 +67,21 @@ const storageRoot = path.resolve(process.env.STORAGE_CONFIG || path.join(process
 export const tmpDir = path.join(storageRoot, "tmp");
 fs.mkdirSync(tmpDir, { recursive: true });
 
+/** Remove stale temporary artifacts left by interrupted media jobs. */
+export function cleanupOldTemp(maxAgeMs = 6 * 60 * 60 * 1000): void {
+  const cutoff = Date.now() - maxAgeMs;
+  try {
+    for (const entry of fs.readdirSync(tmpDir, { withFileTypes: true })) {
+      const target = path.join(tmpDir, entry.name);
+      const stat = fs.statSync(target);
+      if (stat.mtimeMs < cutoff) fs.rmSync(target, { recursive: true, force: true });
+    }
+  } catch {
+    /* cleanup is best effort and must never crash the bot */
+  }
+}
+cleanupOldTemp();
+
 export function ffmpegPath(): string | null {
   const configured = process.env.FFMPEG_PATH?.trim();
   if (configured && fs.existsSync(configured)) return configured;

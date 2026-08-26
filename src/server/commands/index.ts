@@ -7,6 +7,7 @@ import * as ai from "./ai";
 import * as media from "./media";
 import * as dl from "./downloader";
 import * as grp from "./group";
+import { extendedCommand } from "./extended";
 
 export type Handler = (ctx: CmdCtx) => Promise<CmdResult>;
 
@@ -197,11 +198,9 @@ const H: Record<string, Handler> = {
 export async function runCommand(ctx: CmdCtx): Promise<CmdResult> {
   const fn = H[ctx.cmd.handler] ?? H[ctx.cmd.name];
   if (fn) return fn(ctx);
-  // fallback: custom "text" command from user
-  if (ctx.cmd.handler === "text") {
-    return { text: String(ctx.cmd.extra?.text ?? "Command ini belum tersedia.") };
-  }
-  return { text: `❌ Handler "${ctx.cmd.name}" belum tersedia di engine ini.` };
+  // Every registry entry has a real modular fallback. Legacy handlers above
+  // remain authoritative and are never replaced by this path.
+  return extendedCommand(ctx);
 }
 
 export { answerGame } from "./info";
