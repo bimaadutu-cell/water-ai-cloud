@@ -27,6 +27,38 @@ const pExecFile = promisify(execFile);
 const FF = ffmpegPath();
 const MAX_FILESIZE_ARG = "50M";
 const COMMAND_TIMEOUT_MS = 180_000;
+const BROWSER_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
+
+async function fetchDirectMedia(url: string, referer?: string): Promise<{ buffer: Buffer; detected: { mime: string; ext: string } | undefined }> {
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      redirect: "follow",
+      signal: AbortSignal.timeout(90_000),
+      headers: {
+        "User-Agent": BROWSER_USER_AGENT,
+        Accept: "video/*,audio/*,image/*,*/*;q=0.8",
+        ...(referer ? { Referer: referer } : {}),
+      },
+    });
+  } catch (error: any) {
+    throw new CmdError(`❌ Gagal mengambil file media: ${String(error?.message || "timeout").slice(0, 160)}`);
+  }
+  if (!response.ok) throw new CmdError(`❌ Sumber media menolak request (HTTP ${response.status}).`);
+  const length = Number(response.headers.get("content-length") || 0);
+  if (length > MAX_FILE_BYTES) throw new CmdError("📦 File melebihi batas 50 MB yang didukung bot.");
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (buffer.length < 64) throw new CmdError("❌ Respons media kosong atau tidak valid.");
+  if (buffer.length > MAX_FILE_BYTES) throw new CmdError("📦 File melebihi batas 50 MB yang didukung bot.");
+  const detected = await (await import("file-type")).fileTypeFromBuffer(buffer);
+  return { buffer, detected };
+}
+
+function mediaKind(mime: string): "image" | "video" | "audio" {
+  if (mime.startsWith("audio/")) return "audio";
+  if (mime.startsWith("image/")) return "image";
+  return "video";
+}
 
 interface ExtractedInfo {
   title: string;
@@ -97,14 +129,20 @@ function selectInfo(raw: any): ExtractedInfo {
 }
 
 async function extractInfo(source: string): Promise<ExtractedInfo> {
-  const { stdout } = await runYtDlp([
+  const args = [
     "--ignore-config",
     "--no-warnings",
     "--no-playlist",
     "--dump-single-json",
     "--skip-download",
-    source,
-  ], 60_000);
+    "--user-agent",
+    BROWSER_USER_AGENT,
+    "--add-header",
+    "Accept-Language:en-US,en;q=0.9",
+  ];
+  if (/tiktok.com|douyin.com/i.test(source)) args.push("--referer", "https://www.tiktok.com/");
+  args.push(source);
+  const { stdout } = await runYtDlp(args, 60_000);
   try {
     return selectInfo(JSON.parse(stdout));
   } catch (error) {
@@ -131,6 +169,10 @@ function commonArgs(outputTemplate: string, source: string): string[] {
     MAX_FILESIZE_ARG,
     "--output",
     outputTemplate,
+    "--user-agent",
+    BROWSER_USER_AGENT,
+    "--add-header",
+    "Accept-Language:en-US,en;q=0.9",
   ];
   if (FF) args.push("--ffmpeg-location", FF);
   args.push(source);
@@ -163,12 +205,16 @@ async function downloadWithCobalt(url: string, mode: "audio" | "video", info: Ex
     const code = data.error?.code ? `: ${data.error.code}` : "";
     throw new CmdError(`❌ Fallback downloader tidak menghasilkan URL media${code}.`);
   }
-  const buffer = await safeFetch(direct, MAX_FILE_BYTES);
+  const fetched = await fetchDirectMedia(direct);
+  if (!fetched.detected) throw new CmdError("Fallback mengembalikan file dengan format yang tidak dikenal.");
+  const detectedMime = fetched.detected.mime;
+  const expectedKind = mode === "audio" ? "audio/" : "video/";
+  if (!detectedMime.startsWith(expectedKind)) throw new CmdError(`Fallback mengembalikan MIME tidak sesuai: ${detectedMime}.`);
   const fileName = String(data.filename || `${sanitizeFilename(info.title)}.${mode === "audio" ? "mp3" : "mp4"}`);
   return {
-    buffer,
+    buffer: fetched.buffer,
     filename: fileName.includes(".") ? fileName : `${fileName}.${mode === "audio" ? "mp3" : "mp4"}`,
-    mimetype: mode === "audio" ? "audio/mpeg" : "video/mp4",
+    mimetype: detectedMime,
     info,
     engine: "Cobalt self-hosted",
   };
@@ -187,6 +233,36 @@ function serviceCandidates(url: string): { name: string; page: string }[] {
 function pageVar(page: string, key: string): string | undefined {
   const match = page.match(new RegExp(`(?:var\\s+)?${key}\\s*=\\s*[\\"']([^\\"']+)`));
   return match?.[1];
+}
+
+async function downloadWithTikwm(url: string, mode: "audio" | "video", info: ExtractedInfo): Promise<DownloadedMedia> {
+  const endpoint = new URL("https://www.tikwm.com/api/");
+  endpoint.searchParams.set("url", url);
+  endpoint.searchParams.set("hd", "1");
+  const response = await fetch(endpoint, {
+    headers: { Accept: "application/json", "User-Agent": BROWSER_USER_AGENT },
+    signal: AbortSignal.timeout(60_000),
+  });
+  const data: any = await response.json().catch(() => null);
+  if (!response.ok || !data || data.code !== 0 || !data.data) {
+    throw new CmdError(`TikWM gagal memproses URL (HTTP ${response.status}).`);
+  }
+  const direct = mode === "audio" ? data.data.music : (data.data.hdplay || data.data.play || data.data.wmplay);
+  if (typeof direct !== "string" || !/^https?:\/\//i.test(direct)) {
+    throw new CmdError(`TikWM tidak menyediakan ${mode === "audio" ? "audio MP3" : "video MP4"} untuk URL ini.`);
+  }
+  const fetched = await fetchDirectMedia(direct, "https://www.tikwm.com/");
+  const mime = fetched.detected?.mime || (mode === "audio" ? "audio/mpeg" : "video/mp4");
+  const valid = mode === "audio" ? mime.startsWith("audio/") : mime.startsWith("video/");
+  if (!valid) throw new CmdError(`TikWM mengembalikan MIME tidak sesuai: ${mime}.`);
+  const ext = fetched.detected?.ext || (mode === "audio" ? "mp3" : "mp4");
+  return {
+    buffer: fetched.buffer,
+    filename: `${sanitizeFilename(String(data.data.title || info.title))}.${ext}`,
+    mimetype: mime,
+    info: { ...info, title: String(data.data.title || info.title), uploader: data.data.author?.unique_id || data.data.author?.nickname || info.uploader, durationSec: Number(data.data.duration) || info.durationSec },
+    engine: "TikWM API",
+  };
 }
 
 function mediaUrls(value: unknown): string[] {
@@ -235,15 +311,14 @@ async function downloadFromWebService(url: string, mode: "audio" | "video", info
   let lastError = "";
   for (const direct of urls.slice(0, 8)) {
     try {
-      const buffer = await safeFetch(direct, MAX_FILE_BYTES);
-      const detected = await (await import("file-type")).fileTypeFromBuffer(buffer);
-      const audio = detected?.mime.startsWith("audio/") || /\.(?:mp3|m4a|ogg)(?:[?#]|$)/i.test(direct);
-      const video = detected?.mime.startsWith("video/") || /\.(?:mp4|webm|mov|m4v)(?:[?#]|$)/i.test(direct);
-      const image = detected?.mime.startsWith("image/");
-      if (mode === "audio" && !audio) continue;
-      if (mode === "video" && !video && !image) continue;
-      const ext = detected?.ext || (audio ? "mp3" : image ? "jpg" : "mp4");
-      return { buffer, filename: `${sanitizeFilename(info.title)}.${ext}`, mimetype: detected?.mime || (audio ? "audio/mpeg" : image ? "image/jpeg" : "video/mp4"), info, engine: candidate.name };
+      const fetched = await fetchDirectMedia(direct, candidate.page);
+      const detected = fetched.detected;
+      if (!detected) continue;
+      const kind = mediaKind(detected.mime);
+      if (mode === "audio" && kind !== "audio") continue;
+      if (mode === "video" && kind === "audio") continue;
+      const ext = detected.ext || (kind === "audio" ? "mp3" : kind === "image" ? "jpg" : "mp4");
+      return { buffer: fetched.buffer, filename: `${sanitizeFilename(info.title)}.${ext}`, mimetype: detected.mime, info, engine: candidate.name };
     } catch (error: any) { lastError = String(error?.message || error); }
   }
   throw new CmdError(`${candidate.name} menemukan URL tetapi media tidak dapat diambil${lastError ? `: ${lastError.slice(0, 160)}` : "."}`);
@@ -251,6 +326,11 @@ async function downloadFromWebService(url: string, mode: "audio" | "video", info
 
 async function downloadWithWebServices(url: string, mode: "audio" | "video", info: ExtractedInfo): Promise<DownloadedMedia> {
   const errors: string[] = [];
+  const host = new URL(url).hostname.toLowerCase();
+  if (host.includes("tiktok.com") || host.includes("douyin.com")) {
+    try { return await downloadWithTikwm(url, mode, info); }
+    catch (error: any) { errors.push(`TikWM API: ${String(error?.message || error).replace(/^🥀\s*/, "")}`); }
+  }
   for (const candidate of serviceCandidates(url)) {
     try { return await downloadFromWebService(url, mode, info, candidate); }
     catch (error: any) { errors.push(`${candidate.name}: ${String(error?.message || error).replace(/^🥀\\s*/, "")}`); }
@@ -330,7 +410,8 @@ function durationText(value?: number): string {
 }
 
 function mediaCaption(media: DownloadedMedia, mode: "audio" | "video"): string {
-  return box(mode === "audio" ? "✅ AUDIO DOWNLOADED" : "✅ VIDEO DOWNLOADED", [
+  const kind = mediaKind(media.mimetype);
+  return box(kind === "audio" ? "✅ AUDIO DOWNLOADED" : kind === "image" ? "✅ IMAGE DOWNLOADED" : "✅ VIDEO DOWNLOADED", [
     `🎵 Title : ${media.info.title}`,
     `👤 Creator : ${media.info.uploader || "-"}`,
     `⏱️ Duration : ${durationText(media.info.durationSec)}`,
@@ -382,7 +463,7 @@ async function downloadCommand(ctx: CmdCtx, mode: "audio" | "video"): Promise<Cm
     if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "✅ Selesai. Mengirim media...");
     return {
       media: {
-        kind: mode,
+        kind: mediaKind(media.mimetype),
         buffer: media.buffer,
         filename: media.filename,
         mimetype: media.mimetype,

@@ -3,7 +3,7 @@
 # agar runtime downloader sama dengan lingkungan deployment yang diminta.
 FROM node:22-bookworm-slim AS base
 
-ARG YTDLP_VERSION=2026.08.19
+ARG YTDLP_CHANNEL=nightly
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV PYTHONUNBUFFERED=1
@@ -34,8 +34,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     pkg-config \
     ca-certificates \
+    fontconfig \
+    fonts-dejavu \
+    fonts-noto-core \
+    fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/* \
-    && wget -q "https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/yt-dlp" -O /usr/local/bin/yt-dlp \
+    && if [ "${YTDLP_CHANNEL}" = "nightly" ]; then \
+         wget -q "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp" -O /usr/local/bin/yt-dlp; \
+       else \
+         wget -q "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp" -O /usr/local/bin/yt-dlp; \
+       fi \
     && chmod 0755 /usr/local/bin/yt-dlp \
     && /usr/local/bin/yt-dlp --version \
     && python3 --version \

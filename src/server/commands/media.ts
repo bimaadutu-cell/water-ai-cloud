@@ -69,7 +69,7 @@ export async function sticker(ctx: CmdCtx): Promise<CmdResult> {
 export const s = sticker;
 export const stiker = sticker;
 
-const EMOJIS = ["💧", "", "⚡", "🔥", "", "🤖", "😎", "", "", "", "✨", "", "", "️", "💙"];
+const EMOJIS = ["💧", "😂", "⚡", "🔥", "🥳", "🤖", "😎", "🚀", "💯", "🎉", "✨", "😍", "😈", "👑", "💙"];
 export async function textsticker(ctx: CmdCtx): Promise<CmdResult> {
   const text = ctx.arg || "WATER AI";
   const lines = text
@@ -90,12 +90,54 @@ export async function randomsticker(ctx: CmdCtx): Promise<CmdResult> {
   return textsticker({ ...ctx, arg: e } as any);
 }
 
+function graphemes(value: string): string[] {
+  try {
+    const segmenter = new Intl.Segmenter("und", { granularity: "grapheme" });
+    return Array.from(segmenter.segment(value), (part) => part.segment);
+  } catch {
+    return Array.from(value);
+  }
+}
+
+function wrapBratText(value: string, maxGraphemes = 15): string[] {
+  const output: string[] = [];
+  for (const rawLine of value.replace(/\r/g, "").split(/\n/)) {
+    const words = rawLine.trim().split(/\s+/).filter(Boolean);
+    let current = "";
+    for (const word of words.length ? words : [""]) {
+      const candidate = current ? `${current} ${word}` : word;
+      if (graphemes(candidate).length <= maxGraphemes || !current) {
+        current = candidate;
+      } else {
+        output.push(current);
+        current = word;
+      }
+      while (graphemes(current).length > maxGraphemes) {
+        const parts = graphemes(current);
+        output.push(parts.splice(0, maxGraphemes).join(""));
+        current = parts.join("");
+      }
+    }
+    if (current || !output.length) output.push(current);
+  }
+  return output.filter((line) => line.length > 0).slice(0, 5);
+}
+
 function bratSvg(text: string, frame = 0): Buffer {
-  const clean = text.trim().slice(0, 180) || "BRAT";
-  const lines = clean.split(/\s+/).flatMap((line) => line.match(/.{1,16}/g) ?? [line]).slice(0, 5);
-  const y0 = 184 + (frame % 2) * 7;
-  const linesSvg = lines.map((line, i) => `<text x="240" y="${y0 + i * 66}" text-anchor="middle">${svgEscape(line.toUpperCase())}</text>`).join("");
-  return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="480" height="480"><rect width="480" height="480" fill="#ffffff"/><style>text{font-family:Impact,Arial,sans-serif;font-size:52px;font-weight:900;fill:#111111;stroke:#111111;stroke-width:0;letter-spacing:1px}</style>${linesSvg}</svg>`);
+  const clean = text.trim().slice(0, 220) || "BRAT";
+  const lines = wrapBratText(clean);
+  const y0 = 126 + (frame % 2) * 2;
+  const gap = lines.length > 1 ? Math.min(76, Math.floor(270 / lines.length)) : 0;
+  const linesSvg = lines.map((line, i) => {
+    const y = y0 + i * gap;
+    const count = Math.max(1, graphemes(line).length);
+    const fontSize = Math.max(30, Math.min(58, Math.floor(410 / (count + 1))));
+    const pillWidth = Math.min(436, Math.max(168, count * Math.max(18, fontSize * 0.72) + 48));
+    const pillX = (480 - pillWidth) / 2;
+    const pillY = y - fontSize + 8;
+    return `<rect x="${pillX.toFixed(1)}" y="${pillY.toFixed(1)}" width="${pillWidth.toFixed(1)}" height="${(fontSize + 28).toFixed(1)}" rx="${Math.min(26, fontSize / 2)}" fill="#fbfbfb" stroke="#111111" stroke-width="3"/><text x="240" y="${y}" font-size="${fontSize}" text-anchor="middle" textLength="${Math.max(90, pillWidth - 32)}" lengthAdjust="spacingAndGlyphs">${svgEscape(line.toUpperCase())}</text>`;
+  }).join("");
+  return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="480" height="480" viewBox="0 0 480 480"><defs><filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="3" stdDeviation="2" flood-color="#000000" flood-opacity="0.14"/></filter></defs><style>text{font-family:"Noto Sans","Noto Color Emoji","DejaVu Sans",sans-serif;font-weight:900;fill:#111111;stroke:#111111;stroke-width:0;letter-spacing:0px}</style><rect width="480" height="480" fill="#ffffff"/><g filter="url(#shadow)">${linesSvg}</g></svg>`);
 }
 
 /** BRAT is intentionally a deterministic local text sticker; it never calls an AI service. */

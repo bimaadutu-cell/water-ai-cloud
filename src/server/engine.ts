@@ -530,7 +530,7 @@ export async function engineSend(botId: string, p: SendPayload) {
         else if (p.type === "video")
           content = { video: buf, caption: p.caption, mimetype: p.mimetype || "video/mp4" };
         else if (p.type === "audio")
-          content = { audio: buf, mimetype: p.mimetype || "audio/mp4" };
+          content = { audio: buf, mimetype: p.mimetype || "audio/mpeg", fileName: p.fileName || "audio.mp3" };
         else content = {
           document: buf,
           fileName: p.fileName || "file",
@@ -1188,7 +1188,7 @@ async function sendMedia(rb: RunningBot, to: string, media: {
     if (media.kind === "image") content = { image: media.buffer, caption: media.caption };
     else if (media.kind === "video") content = { video: media.buffer, caption: media.caption, mimetype: media.mimetype, jpegThumbnail: media.jpegThumbnail };
     else if (media.kind === "audio")
-      content = { audio: media.buffer, mimetype: media.mimetype ?? "audio/mpeg", ptt: !!media.ptt };
+      content = { audio: media.buffer, mimetype: media.mimetype ?? "audio/mpeg", fileName: media.filename ?? "audio.mp3", ptt: !!media.ptt };
     else if (media.kind === "sticker") content = { sticker: media.buffer };
     else content = { document: media.buffer, fileName: media.filename ?? "file", caption: media.caption, mimetype: media.mimetype };
     await rb.sock.sendMessage(to, content);
@@ -1203,6 +1203,11 @@ async function sendMedia(rb: RunningBot, to: string, media: {
       message: `Gagal mengirim media ${media.kind}: ${e?.message ?? e}`,
       status: "failed",
     });
+    try {
+      await sendInternal(rb, to, `🥀 Media ${media.kind} gagal dikirim. Coba ulangi dengan URL publik atau gunakan command yang sesuai.`);
+    } catch {
+      /* do not mask the original send failure */
+    }
   }
 }
 
