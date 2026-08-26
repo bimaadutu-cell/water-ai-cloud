@@ -86,6 +86,7 @@ export const REGISTRY: RegistryCommand[] = [
   c("bratvid", "brat", "Alias bratvideo: animated WebP sticker (tanpa AI)"),
 
   /* 🖼️ IMAGE — real processing with sharp */
+  c("react", "image", "Reaksi emoji pada pesan yang direply"),
   c("removebg", "image", "Hapus background (butuh REMOVEBG_API_KEY)", "all", true),
   c("enhance", "image", "Enhance kualitas gambar"),
   c("upscale", "image", "Upscale 2x (reply gambar / URL)", "all", true),

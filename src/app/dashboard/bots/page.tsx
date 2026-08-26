@@ -36,6 +36,7 @@ type Bot = {
   lastActivityAt: string | null;
   engine: boolean;
   wa: { status: string; phoneNumber: string | null; lastConnectedAt: string | null } | null;
+  settings?: { menuPhotoUrl?: string };
 };
 
 function BotsInner() {
@@ -49,7 +50,7 @@ function BotsInner() {
 
   const [form, setForm] = useState({ name: "", prefix: "!", ownerNumber: "", description: "" });
   const [newName, setNewName] = useState("");
-  const [cfg, setCfg] = useState({ prefix: "!", ownerNumber: "", description: "" });
+  const [cfg, setCfg] = useState({ prefix: "!", ownerNumber: "", description: "", menuPhotoUrl: "" });
 
   useEffect(() => {
     const fn = () => reload();
@@ -115,7 +116,7 @@ function BotsInner() {
   };
 
   const openConfig = (b: Bot) => {
-    setCfg({ prefix: b.prefix, ownerNumber: b.ownerNumber ?? "", description: b.description ?? "" });
+    setCfg({ prefix: b.prefix, ownerNumber: b.ownerNumber ?? "", description: b.description ?? "", menuPhotoUrl: b.settings?.menuPhotoUrl ?? "" });
     setConfiguring(b);
   };
 
@@ -123,7 +124,7 @@ function BotsInner() {
     if (!configuring) return;
     setBusy("config");
     try {
-      await api(`/dashboard/bots/${configuring.id}/update`, "POST", cfg);
+      await api(`/dashboard/bots/${configuring.id}/update`, "POST", { prefix: cfg.prefix, ownerNumber: cfg.ownerNumber, description: cfg.description, settings: { menuPhotoUrl: cfg.menuPhotoUrl } });
       toast("Konfigurasi disimpan");
       setConfiguring(null);
       reload();
@@ -342,6 +343,10 @@ function BotsInner() {
           </div>
           <Field label="Description">
             <textarea className="input min-h-16" value={cfg.description} onChange={(e) => setCfg({ ...cfg, description: e.target.value })} />
+          </Field>
+          <Field label="Foto Menu (URL HTTPS)">
+            <input className="input" value={cfg.menuPhotoUrl} onChange={(e) => setCfg({ ...cfg, menuPhotoUrl: e.target.value })} placeholder="https://contoh.com/menu.jpg" maxLength={2000} />
+            <p className="mt-1 text-[10px] text-slate-600">Foto ini akan dikirim sebagai gambar pada .menu dan .allmenu. Kosongkan untuk kembali ke menu teks.</p>
           </Field>
           <div className="rounded-lg bg-white/[0.03] px-3 py-2.5 text-[11px] text-slate-500">
             Bot ID: <span className="font-mono text-slate-400">{configuring?.id}</span>

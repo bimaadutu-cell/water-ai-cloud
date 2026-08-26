@@ -85,6 +85,16 @@ Pada image Docker Bookworm, binary di-install ke `/usr/local/bin/yt-dlp`, Python
 
 `.brat teks` membuat sticker WebP lokal dengan latar putih dan teks hitam tebal melalui SVG/Sharp, tanpa watermark dan tanpa memanggil AI. `.bratgif teks`, `.bratvideo teks`, dan `.bratvid teks` membuat animated WebP sticker 3 detik menggunakan FFmpeg; yang bergerak hanya teksnya. `.bratsticker` membuat variasi teks BRAT lokal. Semua command membutuhkan argumen teks, menampilkan status `⌛` lalu `✅`, dan mengirim petunjuk penggunaan jika argumen kosong.
 
+## Foto menu dan reaksi WhatsApp
+
+Pada halaman Dashboard → Bots → Settings, pemilik bot dapat mengisi **Foto Menu (URL HTTPS)**. URL tersebut disimpan di `bots.settings.menuPhotoUrl` dan akan dikirim sebagai gambar dengan caption menu ketika `.menu` atau `.allmenu` dipanggil. Jika URL kosong atau gagal diambil, bot otomatis kembali ke menu teks.
+
+Command `.react 👍` dapat dipakai sebagai reply pada pesan untuk mengirim reaksi emoji melalui API Baileys. Command `.setppgc` menggunakan `updateProfilePicture` resmi Baileys; bot harus menjadi admin grup dan menerima reply gambar. Command `.swgc` mengirim teks/foto/video ke `status@broadcast`; WhatsApp tidak memiliki objek “status grup” terpisah, sehingga audience anggota grup diteruskan melalui `statusJidList`.
+
+## Kredensial admin awal
+
+Saat database pertama kali dimigrasikan, akun awal dibuat sebagai `admin` dengan email `admin@wateraicloud.dev`. Password default adalah `Water@2026` hanya jika `ADMIN_INITIAL_PASSWORD` tidak diset. Untuk keamanan, ubah password segera setelah login atau set `ADMIN_INITIAL_PASSWORD` sebelum migrasi. Nilai password environment aktif tidak ditampilkan oleh aplikasi.
+
 ## REST API (Gateway v1)
 
 Autentikasi: `Authorization: Bearer WAC_...` (DB hanya menyimpan SHA-256 key).

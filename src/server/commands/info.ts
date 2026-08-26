@@ -19,6 +19,7 @@ import {
   BOT_VERSION,
   isPremium,
   todayUsed,
+  safeFetch,
 } from "./core";
 import { getGame, delGame, setGame } from "./state";
 
@@ -132,7 +133,18 @@ async function renderMenu(ctx: CmdCtx, full: boolean): Promise<CmdResult> {
     .where(and(eq(commands.botId, ctx.bot.id), eq(commands.enabled, true)));
   const owners = await db.select({ phone: botOwners.phone }).from(botOwners).where(eq(botOwners.botId, ctx.bot.id));
   const name = (ctx.raw?.pushName as string) || "user";
-  return { text: buildMenu(ctx.bot, name, rows, [ctx.bot.ownerNumber ?? "", ...owners.map((o) => o.phone)].filter(Boolean), full) };
+  const text = buildMenu(ctx.bot, name, rows, [ctx.bot.ownerNumber ?? "", ...owners.map((o) => o.phone)].filter(Boolean), full);
+  const menuPhotoUrl = String((ctx.bot.settings as any)?.menuPhotoUrl ?? "").trim();
+  if (!/^https?:\/\//i.test(menuPhotoUrl)) return { text };
+  try {
+    const buffer = await safeFetch(menuPhotoUrl, 8 * 1024 * 1024);
+    const ft = await import("file-type");
+    const detected = await ft.fileTypeFromBuffer(buffer);
+    if (!detected?.mime.startsWith("image/")) throw new Error("URL bukan gambar");
+    return { media: { kind: "image", buffer, mimetype: detected.mime, caption: text } };
+  } catch {
+    return { text: `${text}\\n\\n🥀 Foto menu tidak dapat dimuat; menu teks tetap ditampilkan.` };
+  }
 }
 
 export async function menu(ctx: CmdCtx): Promise<CmdResult> {

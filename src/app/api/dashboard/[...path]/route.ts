@@ -687,13 +687,25 @@ async function botAction(user: User, botId: string, action: string) {
 }
 
 async function updateBot(user: User, botId: string, body: any) {
-  await ownedBot(user, botId);
+  const current = await ownedBot(user, botId);
   const patch: any = {};
   if (typeof body?.name === "string" && body.name.trim()) patch.name = body.name.trim().slice(0, 64);
   if (typeof body?.prefix === "string" && body.prefix) patch.prefix = body.prefix.slice(0, 4);
   if (typeof body?.ownerNumber === "string") patch.ownerNumber = body.ownerNumber.replace(/\D/g, "").slice(0, 32) || null;
   if (typeof body?.description === "string") patch.description = body.description.slice(0, 500);
-  if (body?.settings && typeof body.settings === "object") patch.settings = body.settings;
+  if (body?.settings && typeof body.settings === "object") {
+    const nextSettings = { ...((current.settings ?? {}) as Record<string, unknown>) };
+    if (Object.prototype.hasOwnProperty.call(body.settings, "menuPhotoUrl")) {
+      const value = String(body.settings.menuPhotoUrl ?? "").trim();
+      if (value) {
+        let parsed: URL;
+        try { parsed = new URL(value); } catch { throw new ApiError("VALIDATION", 400, "URL foto menu tidak valid"); }
+        if (!["http:", "https:"].includes(parsed.protocol)) throw new ApiError("VALIDATION", 400, "Foto menu harus memakai URL HTTP atau HTTPS");
+        nextSettings.menuPhotoUrl = parsed.toString().slice(0, 2000);
+      } else delete nextSettings.menuPhotoUrl;
+    }
+    patch.settings = nextSettings;
+  }
   if (!Object.keys(patch).length) throw new ApiError("VALIDATION", 400, "Tidak ada field yang diupdate");
   const rows = await db.update(bots).set(patch).where(eq(bots.id, botId)).returning();
   await addLog({ userId: user.id, botId, event: "bot.update", message: `Bot diupdate: ${Object.keys(patch).join(", ")}` });

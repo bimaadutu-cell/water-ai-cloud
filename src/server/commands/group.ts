@@ -76,6 +76,17 @@ export async function swgc(ctx: CmdCtx): Promise<CmdResult> {
   }
 }
 
+export async function react(ctx: CmdCtx): Promise<CmdResult> {
+  if (!ctx.replyKey) return { text: `⚠️ Reply pesan lalu ketik ${ctx.bot.prefix}react <emoji>` };
+  const emoji = Array.from(ctx.arg.trim())[0] || "👍";
+  try {
+    await ctx.sock.sendMessage(ctx.n.remoteJid, { react: { text: emoji, key: ctx.replyKey } });
+    return { text: `✅ Reaksi ${emoji} dikirim.` };
+  } catch (error: any) {
+    return { text: `🥀 Gagal mengirim reaksi: ${String(error?.message || "error").slice(0, 180)}` };
+  }
+}
+
 export async function groupinfo(ctx: CmdCtx): Promise<CmdResult> {
   if (!(await requireGroup(ctx))) return { text: (ctx as any)._err };
   try {
@@ -268,12 +279,13 @@ export async function setdesc(ctx: CmdCtx): Promise<CmdResult> {
 export async function setppgc(ctx: CmdCtx): Promise<CmdResult> {
   if (!(await requireGroup(ctx))) return { text: (ctx as any)._err };
   const media = await ctx.getRepliedMedia().catch(() => null);
-  if (!media) return { text: "Reply gambar dengan .setppgc" };
+  if (!media || !media.mimetype.startsWith("image/")) return { text: "⚠️ Reply gambar dengan .setppgc" };
+  if (typeof ctx.sock.updateProfilePicture !== "function") return { text: "🥀 Baileys pada server tidak menyediakan updateProfilePicture." };
   try {
-    await ctx.sock.groupUpdateProfilePicture(ctx.n.remoteJid, media.buffer);
-    return { text: "✅ PP grup diperbarui." };
+    await ctx.sock.updateProfilePicture(ctx.n.remoteJid, media.buffer);
+    return { text: "✅ Foto profil grup diperbarui." };
   } catch (e: any) {
-    return { text: `❌ Gagal ubah PP: ${e?.message ?? "error"}` };
+    return { text: `🥀 Gagal mengubah foto profil grup: ${String(e?.message ?? "error").slice(0, 220)}` };
   }
 }
 

@@ -110,6 +110,7 @@ const H: Record<string, Handler> = {
   bratvid: media.bratvid,
 
   /* 🖼️ IMAGE */
+  react: grp.react,
   removebg: media.removebg,
   enhance: media.enhance,
   upscale: media.upscale,
