@@ -41,18 +41,21 @@ export interface CmdCtx {
   getRepliedMedia: () => Promise<{ buffer: Buffer; mimetype: string } | null>;
 }
 
+export interface CmdMedia {
+  kind: "image" | "video" | "audio" | "document" | "sticker";
+  buffer: Buffer;
+  filename?: string;
+  mimetype?: string;
+  caption?: string;
+  ptt?: boolean;
+  jpegThumbnail?: Buffer;
+}
+
 export interface CmdResult {
   text?: string;
   buttons?: { id: string; text: string }[];
-  media?: {
-    kind: "image" | "video" | "audio" | "document" | "sticker";
-    buffer: Buffer;
-    filename?: string;
-    mimetype?: string;
-    caption?: string;
-    ptt?: boolean;
-    jpegThumbnail?: Buffer;
-  };
+  /** A single media item or a bounded batch for public carousels. */
+  media?: CmdMedia | CmdMedia[];
 }
 
 export class CmdError extends Error {}
@@ -101,6 +104,7 @@ export async function safeFetch(
   url: string,
   maxBytes = MAX_FILE_BYTES
 ): Promise<Buffer> {
+  validateExternalUrl(url);
   let res: Response;
   try {
     res = await fetch(url, { signal: AbortSignal.timeout(45000), redirect: "follow" });
@@ -120,7 +124,20 @@ export async function safeFetch(
   return buf;
 }
 
-/** Run fn with a temp file (safe name, auto-cleanup). */
+export function validateExternalUrl(value: string): URL {
+  let url: URL;
+  try { url = new URL(value); } catch { throw new CmdError("❌ URL tidak valid."); }
+  if (!['http:', 'https:'].includes(url.protocol)) throw new CmdError("❌ Hanya URL HTTP/HTTPS yang didukung.");
+  const host = url.hostname.toLowerCase();
+  if (host === 'localhost' || host.endsWith('.localhost') || host === '0.0.0.0' || host === '::1' || /^127\\./.test(host) || /^10\\./.test(host) || /^192\\.168\\./.test(host) || /^172\\.(1[6-9]|2\\d|3[0-1])\\./.test(host) || host.startsWith('169.254.')) {
+    throw new CmdError("❌ URL menuju jaringan internal tidak diizinkan.");
+  }
+  return url;
+}
+
+/**
+ * Run fn with a temp file (safe name, auto-cleanup).
+ */
 export async function withTempFile<T>(
   buffer: Buffer,
   ext: string,

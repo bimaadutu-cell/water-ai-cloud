@@ -21,6 +21,7 @@ import {
   tmpDir,
   ffmpegPath,
   sanitizeFilename,
+  validateExternalUrl,
 } from "./core";
 
 const pExecFile = promisify(execFile);
@@ -30,6 +31,7 @@ const COMMAND_TIMEOUT_MS = 180_000;
 const BROWSER_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
 
 async function fetchDirectMedia(url: string, referer?: string): Promise<{ buffer: Buffer; detected: { mime: string; ext: string } | undefined }> {
+  validateExternalUrl(url);
   let response: Response;
   try {
     response = await fetch(url, {
@@ -70,6 +72,7 @@ interface ExtractedInfo {
 
 interface DownloadedMedia {
   buffer: Buffer;
+  kind?: "image" | "video" | "audio";
   filename: string;
   mimetype: string;
   info: ExtractedInfo;
@@ -403,6 +406,59 @@ async function downloadWithYtDlp(source: string, mode: "audio" | "video", info: 
   }
 }
 
+async function convertVideoToMp4(input: string, output: string): Promise<void> {
+  if (!FF) throw new CmdError("❌ FFmpeg tidak tersedia untuk mengonversi video ke MP4.");
+  try {
+    await pExecFile(FF, ["-y", "-i", input, "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", output], { timeout: 120000, maxBuffer: 4 * 1024 * 1024 });
+  } catch {
+    throw new CmdError("❌ Media gagal dikonversi menjadi MP4.");
+  }
+  const stat = await fs.promises.stat(output).catch(() => null);
+  if (!stat?.isFile() || stat.size < 64 || stat.size > MAX_FILE_BYTES) throw new CmdError("❌ Hasil konversi MP4 tidak valid atau terlalu besar.");
+}
+
+async function validateDownloadedMedia(file: string, workDir: string, forced: "image" | "video" | "any"): Promise<{ buffer: Buffer; filename: string; mimetype: string; kind: "image" | "video" }> {
+  const original = await fs.promises.readFile(file);
+  const detected = await (await import("file-type")).fileTypeFromBuffer(original);
+  if (!detected || original.length < 64 || original.length > MAX_FILE_BYTES) throw new CmdError("❌ Media gagal diproses.");
+  const kind = mediaKind(detected.mime);
+  if (kind === "audio" || (forced !== "any" && kind !== forced)) throw new CmdError("❌ Tipe media tidak sesuai command.");
+  if (kind === "video" && detected.mime !== "video/mp4") {
+    const output = path.join(workDir, `converted-${Date.now()}.mp4`);
+    await convertVideoToMp4(file, output);
+    return { buffer: await fs.promises.readFile(output), filename: `${sanitizeFilename(path.basename(file, path.extname(file)))}.mp4`, mimetype: "video/mp4", kind: "video" };
+  }
+  const ext = kind === "video" ? "mp4" : (detected.ext || "jpg");
+  return { buffer: original, filename: `${sanitizeFilename(path.basename(file, path.extname(file)))}.${ext}`, mimetype: kind === "video" ? "video/mp4" : detected.mime, kind };
+}
+
+async function downloadInstagramMedia(url: string, mode: "image" | "video" | "any", info: ExtractedInfo): Promise<DownloadedMedia[]> {
+  const workDir = await fs.promises.mkdtemp(path.join(tmpDir, "instagram-"));
+  try {
+    const outputTemplate = path.join(workDir, "item-%(playlist_index)03d.%(ext)s");
+    const args = ["--ignore-config", "--no-warnings", "--yes-playlist", "--abort-on-error", "--abort-on-unavailable-fragments", "--no-part", "--force-overwrites", "--restrict-filenames", "--retries", "2", "--socket-timeout", "30", "--max-filesize", MAX_FILESIZE_ARG, "--output", outputTemplate, "--user-agent", BROWSER_USER_AGENT, "--add-header", "Accept-Language:en-US,en;q=0.9"];
+    if (FF) args.push("--ffmpeg-location", FF);
+    args.push(url);
+    await runYtDlp(args);
+    const files = (await fs.promises.readdir(workDir)).filter((name) => !name.endsWith(".part") && !name.endsWith(".ytdl") && !name.startsWith("converted-")).sort().map((name) => path.join(workDir, name));
+    if (!files.length) throw new CmdError("❌ Instagram tidak menghasilkan media publik.");
+    const output: DownloadedMedia[] = [];
+    for (const file of files.slice(0, 12)) {
+      try {
+        const valid = await validateDownloadedMedia(file, workDir, mode);
+        output.push({ buffer: valid.buffer, kind: valid.kind, filename: valid.filename, mimetype: valid.mimetype, info, engine: "yt-dlp Instagram extractor" });
+      } catch {
+        // Carousels may mix photos and videos; skip non-matching items and
+        // report an error only when no valid item remains.
+      }
+    }
+    if (!output.length) throw new CmdError("❌ Media Instagram tidak sesuai tipe atau gagal divalidasi.");
+    return output;
+  } finally {
+    await fs.promises.rm(workDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 function durationText(value?: number): string {
   if (!value || value < 0) return "-";
   const sec = Math.floor(value);
@@ -478,6 +534,24 @@ async function downloadCommand(ctx: CmdCtx, mode: "audio" | "video"): Promise<Cm
   }
 }
 
+async function instagramCommand(ctx: CmdCtx, mode: "image" | "video" | "any"): Promise<CmdResult> {
+  const arg = ctx.arg.trim();
+  if (!arg) return { text: `❌ URL Instagram belum diberikan.\n\nContoh: ${ctx.bot.prefix}${mode === "image" ? "instagramphoto" : mode === "video" ? "instagramvideo" : "instagram"} https://www.instagram.com/reel/xxxxx/` };
+  let url: URL;
+  try { url = new URL(arg); } catch { return { text: "❌ URL Instagram tidak valid." }; }
+  if (!/(^|\.)instagram\.com$/i.test(url.hostname)) return { text: "❌ Gunakan URL Instagram yang valid." };
+  const key = await progress(ctx.sock, ctx.n.remoteJid, null, "🔎 Menganalisis URL Instagram...");
+  try {
+    const items = await downloadInstagramMedia(url.toString(), mode, { title: `Instagram ${url.pathname}`, webpageUrl: url.toString() });
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, `✅ ${items.length} media tervalidasi. Mengirim...`);
+    return { media: items.map((item, index) => ({ kind: item.kind === "image" ? "image" as const : "video" as const, buffer: item.buffer, filename: item.filename, mimetype: item.mimetype, caption: `${index + 1}/${items.length} • ${item.kind === "image" ? "IMAGE" : "VIDEO MP4"} • Instagram` })) };
+  } catch (error: any) {
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "❌ Media Instagram gagal diproses.");
+    if (error instanceof CmdError) throw error;
+    throw new CmdError("❌ Media Instagram gagal diproses. Silakan gunakan URL publik lain.");
+  }
+}
+
 export async function play(ctx: CmdCtx): Promise<CmdResult> {
   return downloadCommand(ctx, "audio");
 }
@@ -490,7 +564,10 @@ export async function video(ctx: CmdCtx): Promise<CmdResult> {
 }
 
 export const tiktok = video;
-export const instagram = video;
+export async function instagram(ctx: CmdCtx): Promise<CmdResult> { return instagramCommand(ctx, "any"); }
+export async function igdl(ctx: CmdCtx): Promise<CmdResult> { return instagramCommand(ctx, "any"); }
+export async function instagramvideo(ctx: CmdCtx): Promise<CmdResult> { return instagramCommand(ctx, "video"); }
+export async function instagramphoto(ctx: CmdCtx): Promise<CmdResult> { return instagramCommand(ctx, "image"); }
 export const youtube = video;
 
 export async function media(ctx: CmdCtx): Promise<CmdResult> {

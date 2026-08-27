@@ -192,27 +192,63 @@ export async function chemistry(ctx: CmdCtx): Promise<CmdResult> {
 async function jget(url: string, timeoutMs = 20000): Promise<any> {
   const res = await fetch(url, {
     signal: AbortSignal.timeout(timeoutMs),
-    headers: { "user-agent": "WATER-AI-Bot/3.5 (educational; contact via dashboard)" },
+    headers: { "user-agent": "WATER-AI-Bot/3.5 (educational; contact via dashboard)", accept: "application/json" },
     redirect: "follow",
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
 
-export async function searchCmd(ctx: CmdCtx): Promise<CmdResult> {
-  if (!ctx.arg) return { text: "Pakai: .search <kata kunci>" };
-  try {
-    const j = await jget(`https://api.duckduckgo.com/?q=${encodeURIComponent(ctx.arg)}&format=json&no_html=1&tl=id`);
-    const lines: string[] = [];
-    if (j?.AbstractText) lines.push(`ℹ️ ${truncate(j.AbstractText, 400)}`);
-    if (j?.Answer) lines.push(`➡️ ${j.Answer}`);
-    const topics = (j?.RelatedTopics ?? []).slice(0, 4).map((t: any) => (t?.FirstURL ? `• ${t.Text?.slice(0, 90)}\n  ${t.FirstURL}` : null)).filter(Boolean);
-    if (topics.length) lines.push(...topics);
-    if (!lines.length) return { text: `❌ Tidak ada hasil instant untuk "${ctx.arg}". Coba .wikipedia ${ctx.arg}` };
-    return { text: box(`🔎 SEARCH: ${truncate(ctx.arg, 40)}`, lines) };
-  } catch {
-    return { text: "❌ Gagal mengakses service pencarian. Coba lagi." };
+function cleanHtml(value: string): string {
+  return value.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#x27;|&#39;/g, "'").replace(/\s+/g, " ").trim();
+}
+
+async function duckHtml(query: string): Promise<{ title: string; url: string; description: string }[]> {
+  const res = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
+    signal: AbortSignal.timeout(20000),
+    headers: { "user-agent": "Mozilla/5.0 (compatible; WATER-AI-Bot/3.5)", accept: "text/html" },
+    redirect: "follow",
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const html = await res.text();
+  const results: { title: string; url: string; description: string }[] = [];
+  const blockRe = /<div[^>]+class="result__body"[\s\S]*?<\/div>\s*<\/div>/gi;
+  for (const block of html.matchAll(blockRe)) {
+    const value = block[0];
+    const link = value.match(/class="result__a"[^>]+href="([^"]+)"/i)?.[1];
+    const title = cleanHtml(value.match(/class="result__a"[^>]*>([\s\S]*?)<\/a>/i)?.[1] || "");
+    const description = cleanHtml(value.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a?>/i)?.[1] || "");
+    if (link && /^https?:\/\//i.test(link) && title) results.push({ title, url: link, description });
   }
+  return results.slice(0, 5);
+}
+
+export async function duckduckgo(ctx: CmdCtx): Promise<CmdResult> {
+  const query = ctx.arg.trim();
+  if (!query) return { text: "❌ Query DuckDuckGo belum diberikan.\n\nContoh: .duckduckgo artificial intelligence" };
+  if (query.length > 300) return { text: "❌ Query terlalu panjang (maksimal 300 karakter)." };
+  try {
+    let results: { title: string; url: string; description: string }[] = [];
+    try {
+      const j = await jget(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1&tl=id`, 15000);
+      if (j?.AbstractURL && j?.AbstractText) results.push({ title: j.Heading || query, url: j.AbstractURL, description: j.AbstractText });
+      for (const item of (j?.RelatedTopics || [])) {
+        if (item?.FirstURL && item?.Text) results.push({ title: String(item.Text).split(" - ")[0], url: item.FirstURL, description: String(item.Text) });
+      }
+    } catch { /* HTML fallback below */ }
+    if (!results.length) results = await duckHtml(query);
+    if (!results.length) return { text: `❌ Tidak ditemukan hasil untuk:\n${query}` };
+    const lines = results.slice(0, 5).map((r, i) => `${i + 1}. *${truncate(cleanHtml(r.title), 120)}*\n${truncate(cleanHtml(r.description), 240)}\n${r.url}`);
+    return { text: box("🔎 DUCKDUCKGO SEARCH", [`Query: ${truncate(query, 200)}`, ...lines]) };
+  } catch (error: any) {
+    const message = String(error?.name || error?.message || "");
+    if (/timeout|abort/i.test(message)) return { text: "⏱️ DuckDuckGo timeout.\nSilakan coba lagi." };
+    return { text: "❌ DuckDuckGo sedang tidak tersedia." };
+  }
+}
+
+export async function searchCmd(ctx: CmdCtx): Promise<CmdResult> {
+  return duckduckgo(ctx);
 }
 
 export async function wikipedia(ctx: CmdCtx): Promise<CmdResult> {

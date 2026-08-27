@@ -80,6 +80,9 @@ const H: Record<string, Handler> = {
 
   /* 🔎 SEARCH */
   search: ai.searchCmd,
+  duckduckgo: ai.duckduckgo,
+  google: ai.duckduckgo,
+  bing: ai.duckduckgo,
   image: ai.imageSearch,
   news: ai.news,
   wikipedia: ai.wikipedia,
@@ -145,6 +148,9 @@ const H: Record<string, Handler> = {
   video: dl.video,
   tiktok: dl.tiktok,
   instagram: dl.instagram,
+  igdl: dl.igdl,
+  instagramvideo: dl.instagramvideo,
+  instagramphoto: dl.instagramphoto,
   youtube: dl.youtube,
   media: dl.media,
 

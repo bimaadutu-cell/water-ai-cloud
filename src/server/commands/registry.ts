@@ -114,6 +114,9 @@ export const REGISTRY: RegistryCommand[] = [
 
   /* 🔎 SEARCH — real public APIs (tanpa key) */
   c("search", "search", "Pencarian web (DuckDuckGo)"),
+  c("duckduckgo", "search", "Pencarian DuckDuckGo dengan hasil URL dan deskripsi"),
+  c("google", "search", "Pencarian web via DuckDuckGo fallback"),
+  c("bing", "search", "Pencarian web via DuckDuckGo fallback"),
   c("image", "search", "Cari gambar (Wikimedia Commons)"),
   c("news", "search", "Berita terbaru (Google News RSS)"),
   c("wikipedia", "search", "Cari di Wikipedia"),
@@ -132,6 +135,9 @@ export const REGISTRY: RegistryCommand[] = [
   c("video", "downloader", "Download video otomatis: .video <judul/url>"),
   c("tiktok", "downloader", "Download TikTok publik: .tiktok <URL>"),
   c("instagram", "downloader", "Download Instagram publik: .instagram <URL>"),
+  c("igdl", "downloader", "Alias Instagram downloader: .igdl <URL>"),
+  c("instagramvideo", "downloader", "Download video/reel Instagram publik: .instagramvideo <URL>"),
+  c("instagramphoto", "downloader", "Download foto Instagram publik: .instagramphoto <URL>"),
   c("youtube", "downloader", "Download YouTube publik: .youtube <URL/judul>"),
   c("media", "downloader", "Download media umum: .media <judul/url>"),
 

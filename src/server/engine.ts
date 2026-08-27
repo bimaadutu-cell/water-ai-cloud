@@ -847,8 +847,10 @@ async function handleIncoming(rb: RunningBot, bot: BotRow, m: any) {
   if (["text", "reply"].includes(n.type) && !isCommandLike) {
     const gctx = makeCmdCtx(rb, bot, m, n, t0, null);
     const gameReply = await answerGame(gctx, n.text).catch(() => null);
-    if (gameReply?.media) await sendMedia(rb, n.remoteJid, gameReply.media);
-    else if (gameReply?.text) await sendInternal(rb, n.remoteJid, gameReply.text);
+    if (gameReply?.media) {
+      const mediaBatch = Array.isArray(gameReply.media) ? gameReply.media.slice(0, 12) : [gameReply.media];
+      for (const item of mediaBatch) await sendMedia(rb, n.remoteJid, item);
+    } else if (gameReply?.text) await sendInternal(rb, n.remoteJid, gameReply.text);
     if (gameReply) return;
   }
 
@@ -897,7 +899,10 @@ async function handleIncoming(rb: RunningBot, bot: BotRow, m: any) {
         }
         try {
           const result = await runCommand(cmdCtx);
-          if (result.media) await sendMedia(rb, n.remoteJid, result.media);
+          if (result.media) {
+            const mediaBatch = Array.isArray(result.media) ? result.media.slice(0, 12) : [result.media];
+            for (const item of mediaBatch) await sendMedia(rb, n.remoteJid, item);
+          }
           else if (result.buttons?.length) await sendInteractive(rb, n.remoteJid, result.text || "", result.buttons);
           else if (result.text) await sendInternal(rb, n.remoteJid, result.text);
           await addLog({
@@ -1092,6 +1097,8 @@ function makeCmdCtx(
     participant: contextInfo.participant || n.sender,
   } : null;
   const parts = n.text.split(/\s+/).filter(Boolean);
+  const quotedText = contextInfo?.quotedMessage ? extractMessageText(contextInfo.quotedMessage).trim() : "";
+  const parsedArg = parts.slice(1).join(" ").trim() || quotedText;
   return {
     bot,
     sock: rb.sock,
@@ -1108,7 +1115,7 @@ function makeCmdCtx(
     n,
     raw: m,
     parts,
-    arg: parts.slice(1).join(" "),
+    arg: parsedArg,
     startedAt: t0,
     replyKey: quotedKey,
     getRepliedMedia: async () => {
