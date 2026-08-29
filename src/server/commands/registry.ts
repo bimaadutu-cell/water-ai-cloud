@@ -223,8 +223,10 @@ export const REGISTRY: RegistryCommand[] = [
   c("owner", "information", "Nomor owner bot"),
   c("copymenu", "information", "Petunjuk salin menu"),
 
-  /* TEMPLATE */
-  c("windowspink", "image", "Buat template Windows Media Player pink dari teks"),
+  /* 🧪 SAFE MOCKUP / TEMPLATE */
+  c("fakech", "image", "Buat chat mockup ber-watermark DEMO/MOCKUP"),
+  c("fakeswwa", "image", "Buat mockup WhatsApp ber-watermark DEMO/MOCKUP"),
+  c("windowspink", "image", "Buat template Windows retro/pink dari teks"),
   c("toquickvideo", "media", "Optimalkan video menjadi MP4"),
 
   /* 👑 OWNER */
@@ -256,7 +258,7 @@ export const REGISTRY: RegistryCommand[] = [
   c("stickerbrightness", "sticker", "Command stickerbrightness"),
   c("stickerinvert", "sticker", "Command stickerinvert"),
   c("stickerduotone", "sticker", "Command stickerduotone"),
-
+  c("stickerpack", "sticker", "Command stickerpack"),
   c("imagecompress", "image", "Command imagecompress"),
   c("imagequality", "image", "Command imagequality"),
   c("imageconvert", "image", "Command imageconvert"),

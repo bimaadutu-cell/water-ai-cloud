@@ -1,5 +1,5 @@
 {
-  "name": "water-ai-cloud-v3",
+  "name": "nextjs-postgresql-template",
   "private": true,
   "engines": {
     "node": ">=22"
