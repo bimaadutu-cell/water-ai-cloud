@@ -8,7 +8,6 @@ import * as media from "./media";
 import * as dl from "./downloader";
 import * as grp from "./group";
 import { extendedCommand } from "./extended";
-import * as mock from "./mock";
 
 export type Handler = (ctx: CmdCtx) => Promise<CmdResult>;
 
@@ -103,7 +102,13 @@ const H: Record<string, Handler> = {
   videosticker: media.videosticker,
   gifsticker: media.gifsticker,
   stickersearch: media.stickersearch,
+  stickerpacksearch: media.stickerpacksearch,
+  "stickerpack-search": media.stickerpacksearch,
+  sps: media.stickerpacksearch,
   randomsticker: media.randomsticker,
+  fakech: media.fakech,
+  windowspink: media.windowspink,
+  fakeswwa: media.fakeswwa,
   smeme: media.smeme,
   rvo: media.rvo,
   stickerinfo: media.stickerinfo,
@@ -154,6 +159,8 @@ const H: Record<string, Handler> = {
   instagramphoto: dl.instagramphoto,
   youtube: dl.youtube,
   media: dl.media,
+  img2img: media.img2img,
+  toquickvideo: media.toquickvideo,
 
   /* 👥 GROUP */
   groupinfo: grp.groupinfo,
@@ -200,12 +207,6 @@ const H: Record<string, Handler> = {
   plugin: grp.plugin,
   maintenance: grp.maintenanceCmd,
   logs: info.logsCmd,
-
-  /* 🧪 SAFE MOCKUP / TEMPLATE */
-  fakech: mock.fakech,
-  fakeswwa: mock.fakeswwa,
-  windowspink: mock.windowspink,
-  toquickvideo: media.toquickvideo,
 };
 
 export async function runCommand(ctx: CmdCtx): Promise<CmdResult> {

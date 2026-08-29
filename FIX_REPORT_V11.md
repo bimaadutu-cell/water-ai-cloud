@@ -1,47 +1,61 @@
-# WATER AI CLOUD V3 — Upgrade/Fix Report V11
+# WATER AI CLOUD V2 → V3 — Audit dan Upgrade Report
 
-Tanggal: 2026-08-29
+## A. Bug atau gap yang ditemukan
 
-## Fokus
-Upgrade dilakukan pada salinan project yang diberikan, bukan membuat project baru. Struktur frontend/backend/DB/Baileys lama dipertahankan.
+Audit menemukan konfigurasi AI masih berdefault ke model lama, endpoint root `/health` belum tersedia, beberapa command dari spesifikasi belum memiliki handler khusus, pencarian sticker pack belum memiliki provider nyata, dan parser wrapping teks template perlu diperbaiki. Proyek juga membutuhkan konfigurasi environment V3 yang konsisten untuk Gemini dan provider media tambahan.
 
-## Perubahan utama
-- Gemini menjadi provider AI utama jika `GEMINI_API_KEY` tersedia.
-- Default model AI di dashboard dan server menjadi `gemini-2.5-flash-lite`.
-- Ditambahkan `src/server/ai-client.ts` untuk satu jalur AI server-side, timeout, error mapping, dan fallback kompatibilitas `AI_API_KEY`.
-- `.env.example` diperbarui dengan `GEMINI_API_KEY`, `GEMINI_BASE_URL`, `GEMINI_MODEL`, `GEMINI_TEMPERATURE`, `GEMINI_MAX_OUTPUT_TOKENS`, dan `GEMINI_TIMEOUT_MS`.
-- Instagram video dipaksa mengambil stream video/audio yang benar, merge/recode ke MP4, lalu diverifikasi menggunakan file signature sebelum dikirim.
-- Downloader umum sekarang menolak hasil dengan MIME yang tidak dikenal; video tidak boleh dilabeli `video/mp4` bila signature file sebenarnya bukan video.
-- Web downloader video diperketat agar tidak menerima image sebagai hasil video.
-- Temporary output `.mp4` pada `toquickvideo` selalu dihapus dengan `finally`.
-- Ditambahkan `.toquickvideo` untuk optimasi/re-encode video nyata ke MP4.
-- Ditambahkan `.fakech`, `.fakeswwa`, dan `.windowspink` sebagai generator template lokal. Chat/WhatsApp mockup selalu diberi watermark `DEMO / MOCKUP` dan peringatan bahwa hasil bukan bukti percakapan/transaksi/identitas.
-- Registry command dideduplikasi agar command yang sama tidak masuk database/menu dua kali.
-- Ditambahkan endpoint `/health` dan `/api/health` dengan status database, engine, AI, FFmpeg, yt-dlp, uptime, dan jumlah bot aktif.
-- Existing Baileys QR, pairing code, owner normalization, group detection, caption parsing, reconnect, multi-bot, API, webhook, database, dan UI tidak dihapus.
+Alur WhatsApp, QR, pairing code, reconnect exponential backoff, multi-bot isolation, owner normalization, group detection, webhook signature/retry, API key hashing, SSE dashboard, dan cleanup media yang sudah ada dipertahankan karena sudah memiliki implementasi backend nyata.
 
-## Audit penting yang dipastikan
-- QR tetap berasal dari event QR Baileys nyata.
-- Pairing code tetap berasal dari `sock.requestPairingCode()` nyata.
-- Caption foto/video/dokumen tetap dibaca oleh parser command.
-- Owner number dinormalisasi ke format internal sebelum dibandingkan.
-- Group ditentukan dari JID `@g.us`.
-- Instagram thumbnail tidak digunakan sebagai file video utama.
-- Media sementara dibersihkan melalui `finally` pada jalur downloader yang diaudit.
+## B. Bug dan gap yang diperbaiki
 
-## Verifikasi yang tersedia di lingkungan kerja
-- Struktur source dan dependency diperiksa.
-- Registry diperiksa dan duplikat command dihapus.
-- Referensi model Gemini lama yang digunakan sebagai default server/dashboard diganti.
-- Dependency install/build penuh tidak dapat diselesaikan di lingkungan kerja ini karena proses `npm ci` ke registry melebihi batas waktu. Karena itu laporan ini tidak mengklaim production build 100% teruji di lingkungan ini.
+| Area | Perbaikan |
+| --- | --- |
+| Gemini | Default diarahkan ke `gemini-2.5-flash-lite`, dengan `GEMINI_API_KEY`, timeout, temperature, token limit, dan pesan error 401/403/408/429/5xx yang jujur. Dukungan nama environment AI lama tetap kompatibel. |
+| Health check | Ditambahkan `GET /health` dengan status database, status engine WhatsApp aktual, status konfigurasi AI, timestamp, dan HTTP 503 jika database gagal. `/api/health` lama tidak dihapus. |
+| Command baru | Ditambahkan handler nyata untuk `.fakech`, `.windowspink`, `.fakeswwa`, `.img2img`, `.stickerpack-search`, `.sps`, dan `.toquickvideo`. |
+| Mockup aman | `.fakeswwa` menghasilkan gambar template dengan watermark `DEMO / MOCKUP / SIMULATION`, sehingga tidak diposisikan sebagai bukti percakapan nyata. |
+| IMG2IMG | Tidak memakai Gemini Flash-Lite sebagai generator gambar. Command menggunakan provider image-edit yang dikonfigurasi melalui `IMAGE_EDIT_API_URL`, dan mengembalikan error jujur jika provider belum tersedia. |
+| Sticker pack | Memerlukan `STICKERPACK_SEARCH_URL` provider nyata; tidak mengembalikan data palsu. |
+| Video cepat | `.toquickvideo` memvalidasi input video, memproses dengan FFmpeg, memvalidasi signature `video/mp4`, dan membersihkan file sementara. |
+| Registry | Command baru dimasukkan ke registry dan dispatcher; duplikasi registry untuk beberapa command lama dibersihkan. |
+| Environment | `.env.example` diperbarui untuk V3 dan tidak berisi API key asli. |
 
-## Catatan deployment
-Pastikan Railway memiliki:
-- `DATABASE_URL`
-- `AUTH_SECRET`
-- `GEMINI_API_KEY` bila ingin AI aktif
-- `STORAGE_CONFIG` pada storage persisten untuk session WhatsApp
-- FFmpeg
-- yt-dlp
+## C. Fitur baru
 
-Jangan memasukkan API key atau session credential ke repository.
+Template image generator untuk `fakech` dan `windowspink` menghasilkan PNG nyata dengan wrapping teks dan tema berbeda. `fakeswwa` menghasilkan desain mockup dengan label keamanan. `img2img` siap memakai provider editing yang kompatibel. `stickerpack-search` memiliki kontrak provider dan validasi respons. `toquickvideo` menghasilkan MP4 yang dioptimalkan untuk WhatsApp.
+
+## D. File yang diubah
+
+File yang diubah atau ditambahkan adalah `src/server/commands/ai.ts`, `src/server/engine.ts`, `src/server/commands/media.ts`, `src/server/commands/index.ts`, `src/server/commands/registry.ts`, `.env.example`, dan `src/app/health/route.ts`.
+
+## E. Dependency yang ditambahkan
+
+Tidak ada dependency npm baru. Proyek tetap menggunakan dependency yang sudah tersedia, termasuk `sharp`, `ffmpeg-static`, `file-type`, Baileys, Drizzle, Next.js, dan PostgreSQL client.
+
+## F. Environment yang dibutuhkan
+
+Environment utama adalah `DATABASE_URL`, `AUTH_SECRET`, `GEMINI_API_KEY`, `GEMINI_MODEL=gemini-2.5-flash-lite`, `GEMINI_TEMPERATURE`, `GEMINI_MAX_OUTPUT_TOKENS`, `GEMINI_TIMEOUT_MS`, `STORAGE_CONFIG`, `YTDLP_PATH`, dan `FFMPEG_PATH`. Provider opsional baru adalah `IMAGE_EDIT_API_URL`, `IMAGE_EDIT_API_KEY`, dan `STICKERPACK_SEARCH_URL`. Tidak ada secret yang dimasukkan ke source code.
+
+## G. Test yang dilakukan
+
+`npm install` telah tersedia dan dependency dapat dipasang. `npm run typecheck` lulus. `npm run lint` lulus. Audit TODO/FIXME pada source tidak menemukan marker aktif. Command baru diverifikasi ada di registry dan dispatcher. Server production dijalankan singkat menggunakan `npm start` dan berhasil mencapai status `Ready`.
+
+## H. Hasil build
+
+`npm run build` lulus dengan `DATABASE_URL` build-time yang disediakan sementara. Semua route berhasil dibuat, termasuk `/health`, `/api/health`, API, dashboard, auth, docs, dan status. Next.js masih memberi satu warning tracing NFT terkait operasi filesystem dinamis yang memang diperlukan engine; warning tersebut tidak menggagalkan build.
+
+## I. Hasil test Instagram video
+
+Implementasi Instagram dari upgrade sebelumnya tetap dipertahankan: URL Instagram diproses dengan playlist extraction, setiap item divalidasi memakai signature MIME, video non-MP4 dikonversi nyata ke MP4, foto dikirim sebagai image, dan carousel dikirim per item. Pengujian URL Instagram publik end-to-end membutuhkan URL publik aktif dan session WhatsApp nyata; hal tersebut tidak tersedia dalam sandbox ini, sehingga tidak diklaim sebagai test jaringan sukses.
+
+## J. Hasil test Gemini
+
+Model dan konfigurasi sudah diarahkan ke `gemini-2.5-flash-lite`, tetapi request provider live tidak dijalankan karena API key pengguna tidak tersedia dalam workspace. Error provider ditangani tanpa stack trace dan tanpa membuat bot crash.
+
+## K. Hasil test WhatsApp
+
+Engine menggunakan Baileys real untuk QR, pairing, status, reconnect, dan session. Pengujian koneksi live membutuhkan kredensial/session WhatsApp pengguna, sehingga tidak diklaim sebagai koneksi sukses di sandbox. Pemeriksaan static dan production build lulus.
+
+## L. Masalah yang masih tersisa
+
+Fitur yang memerlukan provider eksternal harus dikonfigurasi oleh administrator: Gemini untuk AI, image-edit provider untuk IMG2IMG, sticker-pack provider untuk pencarian paket, yt-dlp untuk downloader, FFmpeg untuk processing, database PostgreSQL untuk runtime, dan persistent storage untuk session WhatsApp di Railway. Tanpa dependency tersebut, command memberikan pesan error yang jujur dan tidak membuat response palsu.

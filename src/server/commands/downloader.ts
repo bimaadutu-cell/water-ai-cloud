@@ -59,8 +59,7 @@ async function fetchDirectMedia(url: string, referer?: string): Promise<{ buffer
 function mediaKind(mime: string): "image" | "video" | "audio" {
   if (mime.startsWith("audio/")) return "audio";
   if (mime.startsWith("image/")) return "image";
-  if (mime.startsWith("video/")) return "video";
-  throw new CmdError(`❌ MIME media tidak didukung: ${mime || "unknown"}.`);
+  return "video";
 }
 
 interface ExtractedInfo {
@@ -320,7 +319,7 @@ async function downloadFromWebService(url: string, mode: "audio" | "video", info
       if (!detected) continue;
       const kind = mediaKind(detected.mime);
       if (mode === "audio" && kind !== "audio") continue;
-      if (mode === "video" && kind !== "video") continue;
+      if (mode === "video" && kind === "audio") continue;
       const ext = detected.ext || (kind === "audio" ? "mp3" : kind === "image" ? "jpg" : "mp4");
       return { buffer: fetched.buffer, filename: `${sanitizeFilename(info.title)}.${ext}`, mimetype: detected.mime, info, engine: candidate.name };
     } catch (error: any) { lastError = String(error?.message || error); }
@@ -385,10 +384,6 @@ async function downloadWithYtDlp(source: string, mode: "audio" | "video", info: 
     if (!stat.isFile() || stat.size < 64) throw new CmdError("❌ File media kosong atau rusak.");
     if (stat.size > MAX_FILE_BYTES) throw new CmdError("📦 File melebihi batas 50 MB yang didukung bot.");
     const buffer = await fs.promises.readFile(selected);
-    const detected = await (await import("file-type")).fileTypeFromBuffer(buffer);
-    if (!detected) throw new CmdError("❌ File hasil downloader tidak memiliki signature media yang valid.");
-    if (mode === "video" && !detected.mime.startsWith("video/")) throw new CmdError(`❌ Extractor mengembalikan ${detected.mime}, bukan video. Thumbnail/image tidak akan dikirim sebagai video.`);
-    if (mode === "audio" && !detected.mime.startsWith("audio/")) throw new CmdError(`❌ Extractor mengembalikan ${detected.mime}, bukan audio.`);
     let thumbnail: Buffer | undefined;
     if (info.thumbnailUrl) {
       try {
@@ -442,7 +437,6 @@ async function downloadInstagramMedia(url: string, mode: "image" | "video" | "an
   try {
     const outputTemplate = path.join(workDir, "item-%(playlist_index)03d.%(ext)s");
     const args = ["--ignore-config", "--no-warnings", "--yes-playlist", "--abort-on-error", "--abort-on-unavailable-fragments", "--no-part", "--force-overwrites", "--restrict-filenames", "--retries", "2", "--socket-timeout", "30", "--max-filesize", MAX_FILESIZE_ARG, "--output", outputTemplate, "--user-agent", BROWSER_USER_AGENT, "--add-header", "Accept-Language:en-US,en;q=0.9"];
-    if (mode === "video") args.push("--format", "bv*[height<=1080]+ba/b[height<=1080]/bv*+ba/best", "--merge-output-format", "mp4", "--recode-video", "mp4");
     if (FF) args.push("--ffmpeg-location", FF);
     args.push(url);
     await runYtDlp(args);

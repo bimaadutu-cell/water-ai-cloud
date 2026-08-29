@@ -1,18 +1,44 @@
 /* AI + SEARCH + EDUCATION — real API calls. AI requires AI_API_KEY (server-side).
  * translate uses MyMemory (free, no key). Search uses public keyless APIs. */
 import { CmdCtx, CmdResult, box, truncate, CmdError } from "./core";
-import { callAi, aiUserMessage } from "../ai-client";
 
 async function aiChat(
   system: string,
   user: string,
   opts: { temperature?: number; maxTokens?: number; imageBase64?: string; imageMime?: string } = {}
 ): Promise<string> {
-  try {
-    return await callAi({ system, user, temperature: opts.temperature, maxTokens: opts.maxTokens, imageBase64: opts.imageBase64, imageMime: opts.imageMime });
-  } catch (error: any) {
-    return aiUserMessage(error);
+  const key = process.env.GEMINI_API_KEY || process.env.AI_API_KEY;
+  if (!key)
+    return "⚠️ AI belum dikonfigurasi di server (GEMINI_API_KEY belum diset). Fitur ini aktif setelah key dipasang — bukan simulasi.";
+  const usingGemini = !!process.env.GEMINI_API_KEY;
+  const base = process.env.GEMINI_API_BASE || process.env.AI_BASE_URL || (usingGemini ? "https://generativelanguage.googleapis.com/v1beta/openai" : "https://api.openai.com/v1");
+  const model = process.env.GEMINI_MODEL || process.env.AI_MODEL || "gemini-2.5-flash-lite";
+  const messages: any[] = [{ role: "system", content: system }];
+  if (opts.imageBase64) {
+    messages.push({
+      role: "user",
+      content: [
+        { type: "text", text: user },
+        { type: "image_url", image_url: { url: `data:${opts.imageMime ?? "image/png"};base64,${opts.imageBase64}` } },
+      ],
+    });
+  } else {
+    messages.push({ role: "user", content: user });
   }
+  const res = await fetch(`${base}/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+    body: JSON.stringify({
+      model,
+      temperature: opts.temperature ?? 0.7,
+      max_tokens: opts.maxTokens ?? Number(process.env.GEMINI_MAX_OUTPUT_TOKENS || 8192),
+      messages,
+    }),
+    signal: AbortSignal.timeout(60000),
+  });
+  if (!res.ok) return `❌ Gagal mengakses service AI (HTTP ${res.status}).`;
+  const j: any = await res.json();
+  return j?.choices?.[0]?.message?.content || "AI tidak memberikan jawaban.";
 }
 
 const WA_SYSTEM =

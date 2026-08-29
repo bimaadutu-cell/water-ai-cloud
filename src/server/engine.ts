@@ -31,7 +31,6 @@ import { runCommand, answerGame } from "./commands";
 import { REGISTRY } from "./commands/registry";
 import { consumeLimit, type CmdCtx } from "./commands/core";
 import { checkFlood } from "./commands/state";
-import { callAi, aiUserMessage } from "./ai-client";
 
 /* ============================== state ============================== */
 interface RunningBot {
@@ -1246,15 +1245,38 @@ async function sendMedia(rb: RunningBot, to: string, media: {
 async function aiRespond(bot: BotRow, userText: string): Promise<string | null> {
   const ai = (bot.settings as any)?.ai;
   if (!ai?.enabled) return null;
+  const key = process.env.GEMINI_API_KEY || process.env.AI_API_KEY;
+  if (!key)
+    return "⚠️ AI belum dikonfigurasi di server (GEMINI_API_KEY belum diset). Bot tetap online.";
   try {
-    return await callAi({
-      system: ai.systemPrompt || "Kamu asisten WhatsApp yang ramah, ringkas, dan membantu.",
-      user: userText,
-      temperature: Number(ai.temperature ?? process.env.GEMINI_TEMPERATURE ?? 0.7),
-      maxTokens: Number(ai.maxTokens ?? process.env.GEMINI_MAX_OUTPUT_TOKENS ?? 300),
+    const base = process.env.GEMINI_API_BASE || process.env.AI_BASE_URL || (process.env.GEMINI_API_KEY ? "https://generativelanguage.googleapis.com/v1beta/openai" : "https://api.openai.com/v1");
+    const res = await fetch(`${base}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        model: ai.model || process.env.GEMINI_MODEL || process.env.AI_MODEL || "gemini-2.5-flash-lite",
+        temperature: Number(ai.temperature ?? process.env.GEMINI_TEMPERATURE ?? 0.7),
+        max_tokens: Number(ai.maxTokens ?? process.env.GEMINI_MAX_OUTPUT_TOKENS ?? 8192),
+        messages: [
+          {
+            role: "system",
+            content:
+              ai.systemPrompt ||
+              "Kamu asisten WhatsApp yang ramah, ringkas, dan membantu.",
+          },
+          { role: "user", content: userText },
+        ],
+      }),
+      signal: AbortSignal.timeout(Number(process.env.GEMINI_TIMEOUT_MS || 60000)),
     });
-  } catch (error: any) {
-    return aiUserMessage(error);
+    if (!res.ok) return res.status === 401 || res.status === 403 ? "⚠️ AI tidak tersedia: API key tidak valid atau tidak memiliki akses." : res.status === 429 ? "⚠️ AI sedang sibuk. Silakan coba lagi nanti." : res.status === 408 || res.status >= 500 ? "⚠️ AI sedang tidak tersedia. Silakan coba lagi." : `⚠️ AI tidak tersedia (HTTP ${res.status}).`;
+    const j: any = await res.json();
+    return j?.choices?.[0]?.message?.content || "AI tidak memberikan jawaban.";
+  } catch {
+    return "⚠️ AI tidak dapat dihubungi saat ini.";
   }
 }
 

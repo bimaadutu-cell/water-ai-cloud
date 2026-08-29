@@ -275,6 +275,77 @@ export async function stickersearch(ctx: CmdCtx): Promise<CmdResult> {
   };
 }
 
+function escapeSvg(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+async function templateImage(text: string, theme: "fakech" | "windowspink" | "fakeswwa"): Promise<Buffer> {
+  const safe = escapeSvg(text.slice(0, 240));
+  const lines = safe.match(/.{1,28}(?:\s|$)/g)?.slice(0, 8) ?? [safe];
+  const colors = theme === "windowspink" ? { bg: "#f7c7dc", panel: "#fff1f7", ink: "#5b2144", accent: "#e879b5" } : theme === "fakeswwa" ? { bg: "#dce7ef", panel: "#f8fbfd", ink: "#172b36", accent: "#25d366" } : { bg: "#141a27", panel: "#24304a", ink: "#f8fafc", accent: "#38bdf8" };
+  const textSvg = lines.map((line, index) => `<text x="540" y="${260 + index * 58}" text-anchor="middle" font-family="Arial,sans-serif" font-size="38" fill="${colors.ink}">${line.trim()}</text>`).join("");
+  const label = theme === "fakeswwa" ? "DEMO • MOCKUP • SIMULATION" : "WATER AI CLOUD • TEMPLATE";
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="720"><rect width="1080" height="720" fill="${colors.bg}"/><rect x="90" y="80" width="900" height="560" rx="28" fill="${colors.panel}" stroke="${colors.accent}" stroke-width="6"/><circle cx="145" cy="135" r="18" fill="${colors.accent}"/><text x="185" y="148" font-family="Arial" font-size="30" font-weight="bold" fill="${colors.ink}">${theme.toUpperCase()}</text>${textSvg}<text x="540" y="585" text-anchor="middle" font-family="Arial" font-size="24" font-weight="bold" fill="${colors.accent}">${label}</text></svg>`;
+  return sharp(Buffer.from(svg)).png().toBuffer();
+}
+
+async function templateCommand(ctx: CmdCtx, theme: "fakech" | "windowspink" | "fakeswwa"): Promise<CmdResult> {
+  const text = ctx.arg.trim();
+  if (!text) return { text: `Pakai: .${theme} <teks>` };
+  const image = await templateImage(text, theme);
+  return { media: { kind: "image", buffer: image, mimetype: "image/png", caption: theme === "fakeswwa" ? "DEMO / MOCKUP / SIMULATION — bukan bukti percakapan nyata" : "Template image WATER AI CLOUD" } };
+}
+
+export const fakech = (ctx: CmdCtx) => templateCommand(ctx, "fakech");
+export const windowspink = (ctx: CmdCtx) => templateCommand(ctx, "windowspink");
+export const fakeswwa = (ctx: CmdCtx) => templateCommand(ctx, "fakeswwa");
+
+export async function img2img(ctx: CmdCtx): Promise<CmdResult> {
+  const endpoint = process.env.IMAGE_EDIT_API_URL?.trim();
+  if (!endpoint) return { text: "❌ IMG2IMG belum tersedia: IMAGE_EDIT_API_URL dan provider image-edit belum dikonfigurasi. Tidak ada simulasi." };
+  const prompt = ctx.arg.trim();
+  if (!prompt) return { text: "Pakai: .img2img <instruksi edit> dengan reply gambar" };
+  const source = await getMediaSource(ctx);
+  if (!source.mimetype.startsWith("image/")) throw new CmdError("❌ IMG2IMG membutuhkan reply gambar.");
+  const response = await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json", ...(process.env.IMAGE_EDIT_API_KEY ? { authorization: `Bearer ${process.env.IMAGE_EDIT_API_KEY}` } : {}) }, body: JSON.stringify({ prompt, imageBase64: source.buffer.toString("base64"), mimeType: source.mimetype }), signal: AbortSignal.timeout(120000) });
+  if (!response.ok) throw new CmdError(`❌ Provider IMG2IMG gagal (HTTP ${response.status}).`);
+  const data: any = await response.json().catch(() => null);
+  const base64 = data?.imageBase64 || data?.data?.[0]?.b64_json;
+  if (typeof base64 !== "string") throw new CmdError("❌ Provider IMG2IMG tidak mengembalikan gambar valid.");
+  const output = Buffer.from(base64, "base64");
+  await sharp(output).metadata();
+  return { media: { kind: "image", buffer: output, mimetype: "image/png", caption: "IMG2IMG selesai" } };
+}
+
+export async function stickerpacksearch(ctx: CmdCtx): Promise<CmdResult> {
+  const query = ctx.arg.trim();
+  if (!query) return { text: "Pakai: .stickerpack-search <keyword>" };
+  const endpoint = process.env.STICKERPACK_SEARCH_URL?.trim();
+  if (!endpoint) return { text: "❌ Sticker pack search membutuhkan STICKERPACK_SEARCH_URL provider nyata. Tidak ada hasil palsu." };
+  const response = await fetch(`${endpoint}?q=${encodeURIComponent(query)}&limit=5`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30000) });
+  if (!response.ok) throw new CmdError(`❌ Provider sticker pack gagal (HTTP ${response.status}).`);
+  const data: any = await response.json();
+  const packs = Array.isArray(data?.packs) ? data.packs.slice(0, 5) : [];
+  if (!packs.length) return { text: `❌ Sticker pack tidak ditemukan untuk "${query}".` };
+  return { text: box("🎨 STICKER PACK SEARCH", packs.map((p: any, i: number) => `${i + 1}. ${truncate(String(p.name || "Tanpa nama"), 80)}\nJumlah: ${p.count ?? "-"}\nAuthor: ${p.author ?? "-"}\n${p.url ?? ""}`)) };
+}
+
+export async function toquickvideo(ctx: CmdCtx): Promise<CmdResult> {
+  const source = await getMediaSource(ctx);
+  if (!source.mimetype.startsWith("video/")) throw new CmdError("❌ .toquickvideo membutuhkan reply video.");
+  const out = await withTempFile(source.buffer, extOf(source.mimetype), async (inPath) => {
+    const outPath = `${inPath}.quick.mp4`;
+    await ffmpeg(["-i", inPath, "-c:v", "libx264", "-preset", "veryfast", "-crf", "28", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", outPath], 120000);
+    return outPath;
+  });
+  try {
+    const buffer = fs.readFileSync(out);
+    const type: any = await (await import("file-type")).fileTypeFromBuffer(buffer);
+    if (type?.mime !== "video/mp4") throw new CmdError("❌ Output optimasi bukan MP4 valid.");
+    return { media: { kind: "video", buffer, filename: "water-quickvideo.mp4", mimetype: "video/mp4", caption: "✅ Video dioptimalkan" } };
+  } finally { fs.rmSync(out, { force: true }); }
+}
+
 /* --------------------------------- IMAGE -------------------------------- */
 async function imgSource(ctx: CmdCtx): Promise<Buffer> {
   const src = await getMediaSource(ctx);
@@ -574,32 +645,6 @@ export async function mediainfo(ctx: CmdCtx): Promise<CmdResult> {
     }
   }
   return { text: box("🎬 MEDIA INFO", lines) };
-}
-
-
-export async function toquickvideo(ctx: CmdCtx): Promise<CmdResult> {
-  const src = await getMediaSource(ctx);
-  if (!src.mimetype.startsWith("video/") && src.mimetype !== "image/gif")
-    throw new CmdError("⚠️ Reply atau kirim video yang valid.");
-  const out = await withTempFile(src.buffer, extOf(src.mimetype), async (inPath) => {
-    const outPath = `${inPath}.mp4`;
-    try {
-      await ffmpeg([
-        "-i", inPath,
-        "-map", "0:v:0", "-map", "0:a?",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-        "-c:a", "aac", "-b:a", "128k",
-        "-movflags", "+faststart", "-pix_fmt", "yuv420p",
-        outPath,
-      ], 180000);
-      const buffer = fs.readFileSync(outPath);
-      if (buffer.length > MAX_FILE_BYTES) throw new CmdError("📦 Hasil video melebihi batas 50 MB.");
-      return buffer;
-    } finally {
-      fs.rmSync(outPath, { force: true });
-    }
-  });
-  return { media: { kind: "video", buffer: out, filename: "water-quickvideo.mp4", mimetype: "video/mp4", caption: `✅ Video dioptimalkan • ${(out.length / 1048576).toFixed(2)} MB` } };
 }
 
 export async function thumbnail(ctx: CmdCtx): Promise<CmdResult> {
