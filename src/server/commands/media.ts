@@ -576,6 +576,32 @@ export async function mediainfo(ctx: CmdCtx): Promise<CmdResult> {
   return { text: box("🎬 MEDIA INFO", lines) };
 }
 
+
+export async function toquickvideo(ctx: CmdCtx): Promise<CmdResult> {
+  const src = await getMediaSource(ctx);
+  if (!src.mimetype.startsWith("video/") && src.mimetype !== "image/gif")
+    throw new CmdError("⚠️ Reply atau kirim video yang valid.");
+  const out = await withTempFile(src.buffer, extOf(src.mimetype), async (inPath) => {
+    const outPath = `${inPath}.mp4`;
+    try {
+      await ffmpeg([
+        "-i", inPath,
+        "-map", "0:v:0", "-map", "0:a?",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+        "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart", "-pix_fmt", "yuv420p",
+        outPath,
+      ], 180000);
+      const buffer = fs.readFileSync(outPath);
+      if (buffer.length > MAX_FILE_BYTES) throw new CmdError("📦 Hasil video melebihi batas 50 MB.");
+      return buffer;
+    } finally {
+      fs.rmSync(outPath, { force: true });
+    }
+  });
+  return { media: { kind: "video", buffer: out, filename: "water-quickvideo.mp4", mimetype: "video/mp4", caption: `✅ Video dioptimalkan • ${(out.length / 1048576).toFixed(2)} MB` } };
+}
+
 export async function thumbnail(ctx: CmdCtx): Promise<CmdResult> {
   const src = await getMediaSource(ctx);
   if (!src.mimetype.startsWith("video")) return { text: "⚠️ Video dibutuhkan untuk .thumbnail" };

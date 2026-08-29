@@ -61,7 +61,7 @@ export default function AutomationPage() {
   // AI assistant settings
   const [ai, setAi] = useState<{ enabled: boolean; model: string; temperature: string; maxTokens: string; systemPrompt: string }>({
     enabled: false,
-    model: "gpt-4o-mini",
+    model: "gemini-2.5-flash-lite",
     temperature: "0.7",
     maxTokens: "300",
     systemPrompt: "Kamu asisten WhatsApp yang ramah dan ringkas.",
@@ -73,7 +73,7 @@ export default function AutomationPage() {
     const s = b.settings?.ai ?? {};
     setAi({
       enabled: !!s.enabled,
-      model: s.model ?? "gpt-4o-mini",
+      model: s.model ?? "gemini-2.5-flash-lite",
       temperature: String(s.temperature ?? 0.7),
       maxTokens: String(s.maxTokens ?? 300),
       systemPrompt: s.systemPrompt ?? "Kamu asisten WhatsApp yang ramah dan ringkas.",

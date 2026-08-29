@@ -8,6 +8,7 @@ import * as media from "./media";
 import * as dl from "./downloader";
 import * as grp from "./group";
 import { extendedCommand } from "./extended";
+import * as mock from "./mock";
 
 export type Handler = (ctx: CmdCtx) => Promise<CmdResult>;
 
@@ -199,6 +200,12 @@ const H: Record<string, Handler> = {
   plugin: grp.plugin,
   maintenance: grp.maintenanceCmd,
   logs: info.logsCmd,
+
+  /* 🧪 SAFE MOCKUP / TEMPLATE */
+  fakech: mock.fakech,
+  fakeswwa: mock.fakeswwa,
+  windowspink: mock.windowspink,
+  toquickvideo: media.toquickvideo,
 };
 
 export async function runCommand(ctx: CmdCtx): Promise<CmdResult> {

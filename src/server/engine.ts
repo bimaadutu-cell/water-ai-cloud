@@ -31,6 +31,7 @@ import { runCommand, answerGame } from "./commands";
 import { REGISTRY } from "./commands/registry";
 import { consumeLimit, type CmdCtx } from "./commands/core";
 import { checkFlood } from "./commands/state";
+import { callAi, aiUserMessage } from "./ai-client";
 
 /* ============================== state ============================== */
 interface RunningBot {
@@ -1245,38 +1246,15 @@ async function sendMedia(rb: RunningBot, to: string, media: {
 async function aiRespond(bot: BotRow, userText: string): Promise<string | null> {
   const ai = (bot.settings as any)?.ai;
   if (!ai?.enabled) return null;
-  const key = process.env.AI_API_KEY;
-  if (!key)
-    return "⚠️ AI belum dikonfigurasi di server (AI_API_KEY belum diset). Bot tetap online.";
   try {
-    const base = process.env.AI_BASE_URL || "https://api.openai.com/v1";
-    const res = await fetch(`${base}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${key}`,
-      },
-      body: JSON.stringify({
-        model: ai.model || process.env.AI_MODEL || "gpt-4o-mini",
-        temperature: Number(ai.temperature ?? 0.7),
-        max_tokens: Number(ai.maxTokens ?? 300),
-        messages: [
-          {
-            role: "system",
-            content:
-              ai.systemPrompt ||
-              "Kamu asisten WhatsApp yang ramah, ringkas, dan membantu.",
-          },
-          { role: "user", content: userText },
-        ],
-      }),
-      signal: AbortSignal.timeout(30000),
+    return await callAi({
+      system: ai.systemPrompt || "Kamu asisten WhatsApp yang ramah, ringkas, dan membantu.",
+      user: userText,
+      temperature: Number(ai.temperature ?? process.env.GEMINI_TEMPERATURE ?? 0.7),
+      maxTokens: Number(ai.maxTokens ?? process.env.GEMINI_MAX_OUTPUT_TOKENS ?? 300),
     });
-    if (!res.ok) return `⚠️ AI error: HTTP ${res.status}`;
-    const j: any = await res.json();
-    return j?.choices?.[0]?.message?.content || "AI tidak memberikan jawaban.";
-  } catch {
-    return "⚠️ AI tidak dapat dihubungi saat ini.";
+  } catch (error: any) {
+    return aiUserMessage(error);
   }
 }
 
