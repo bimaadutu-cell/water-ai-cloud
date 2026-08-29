@@ -201,9 +201,7 @@ const H: Record<string, Handler> = {
   maintenance: grp.maintenanceCmd,
   logs: info.logsCmd,
 
-  /* 🧪 SAFE MOCKUP / TEMPLATE */
-  fakech: mock.fakech,
-  fakeswwa: mock.fakeswwa,
+  /* TEMPLATE */
   windowspink: mock.windowspink,
   toquickvideo: media.toquickvideo,
 };
