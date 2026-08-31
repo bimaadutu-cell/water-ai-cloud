@@ -161,13 +161,18 @@ export async function menu(ctx: CmdCtx): Promise<CmdResult> {
   const p = ctx.bot.prefix || "!";
   // Style 1: no buttons (text only)
   if (style === 1) return result;
-  // Style 2-5: buttons supported
+  // Style 2-5: tombol instan (max 3 untuk kompatibilitas WA)
   const buttons = [
     { id: `${p}allmenu`, text: "📋 ALLMENU" },
     { id: `${p}help`, text: "❓ HELP" },
     { id: `${p}status`, text: "📡 STATUS" },
   ];
-  return { ...result, buttons };
+  // Pastikan text ada agar tombol tetap terkirim meski ada foto menu
+  return {
+    ...result,
+    text: result.text || "Pilih tombol di bawah untuk navigasi cepat 👇",
+    buttons,
+  };
 }
 
 export async function allmenu(ctx: CmdCtx): Promise<CmdResult> {
@@ -177,6 +182,7 @@ export async function allmenu(ctx: CmdCtx): Promise<CmdResult> {
   const p = ctx.bot.prefix || "!";
   return {
     ...result,
+    text: result.text || "Navigasi cepat 👇",
     buttons: [
       { id: `${p}menu`, text: "🏠 MENU" },
       { id: `${p}help`, text: "❓ HELP" },

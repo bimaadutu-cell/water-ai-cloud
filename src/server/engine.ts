@@ -902,9 +902,15 @@ async function handleIncoming(rb: RunningBot, bot: BotRow, m: any) {
           if (result.media) {
             const mediaBatch = Array.isArray(result.media) ? result.media.slice(0, 12) : [result.media];
             for (const item of mediaBatch) await sendMedia(rb, n.remoteJid, item);
+            // Tombol tetap dikirim setelah media (menu style 2-5)
+            if (result.buttons?.length) {
+              await sendInteractive(rb, n.remoteJid, result.text || "Pilih menu cepat:", result.buttons);
+            }
+          } else if (result.buttons?.length) {
+            await sendInteractive(rb, n.remoteJid, result.text || "", result.buttons);
+          } else if (result.text) {
+            await sendInternal(rb, n.remoteJid, result.text);
           }
-          else if (result.buttons?.length) await sendInteractive(rb, n.remoteJid, result.text || "", result.buttons);
-          else if (result.text) await sendInternal(rb, n.remoteJid, result.text);
           await addLog({
             userId: bot.userId,
             botId: bot.id,

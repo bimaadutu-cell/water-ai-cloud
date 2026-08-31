@@ -98,11 +98,18 @@ function displayError(error: any): string {
   if (error?.code === "ENOENT") {
     return "🥀 Engine downloader belum terpasang. Install yt-dlp dan set YTDLP_PATH bila binary tidak ada di PATH.";
   }
-  if (/login|sign in|private|authentication|members only/i.test(message)) {
+  // Jangan salah-klasifikasi error pencarian / rate-limit sebagai privat
+  if (/Sign in to confirm|confirm you.?re not a bot|bot check/i.test(message)) {
+    return "🥀 YouTube meminta verifikasi. Coba lagi atau gunakan URL lengkap video.";
+  }
+  if (/login|sign in|private|authentication|members only/i.test(message) && !/ytsearch|no results|unable to download/i.test(message)) {
     return "🥀 Media ini membutuhkan login atau bersifat privat. Bot hanya memproses media publik tanpa bypass akses.";
   }
   if (/unsupported|no suitable extractor/i.test(message)) {
     return "🥀 Situs atau URL ini belum didukung extractor yt-dlp.";
+  }
+  if (/no results|unable to extract|did not return any results|not found/i.test(message)) {
+    return "🥀 Lagu/video tidak ditemukan. Coba judul lebih spesifik atau tempel URL YouTube.";
   }
   return `🥀 Downloader gagal memproses media${message ? `: ${message.slice(0, 260)}` : "."}`;
 }
@@ -142,6 +149,9 @@ async function extractInfo(source: string): Promise<ExtractedInfo> {
     BROWSER_USER_AGENT,
     "--add-header",
     "Accept-Language:en-US,en;q=0.9",
+    // Client android sering lebih stabil tanpa cookie
+    "--extractor-args",
+    "youtube:player_client=android,web;player_skip=webpage,configs",
   ];
   if (/tiktok.com|douyin.com/i.test(source)) args.push("--referer", "https://www.tiktok.com/");
   args.push(source);
@@ -152,6 +162,142 @@ async function extractInfo(source: string): Promise<ExtractedInfo> {
     if (error instanceof CmdError) throw error;
     throw new CmdError("❌ Metadata media tidak valid dari extractor yt-dlp.");
   }
+}
+
+/** Cari lagu via API publik + scrape YouTube (tanpa login). */
+async function searchSongPublic(query: string): Promise<ExtractedInfo> {
+  const q = query.trim();
+  if (!q) throw new CmdError("❌ Judul lagu kosong.");
+
+  // 1) Scrape halaman pencarian YouTube (paling andal tanpa key)
+  try {
+    const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}&sp=EgIQAQ%253D%253D`; // filter video
+    const res = await fetch(searchUrl, {
+      signal: AbortSignal.timeout(15_000),
+      headers: {
+        "User-Agent": BROWSER_USER_AGENT,
+        "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
+        Accept: "text/html,application/xhtml+xml",
+      },
+      redirect: "follow",
+    });
+    if (res.ok) {
+      const html = await res.text();
+      // videoId dari ytInitialData / watch?v=
+      const idMatches = [
+        ...html.matchAll(/"videoId":"([a-zA-Z0-9_-]{11})"/g),
+        ...html.matchAll(/watch\?v=([a-zA-Z0-9_-]{11})/g),
+      ];
+      const seen = new Set<string>();
+      for (const m of idMatches) {
+        const id = m[1];
+        if (seen.has(id)) continue;
+        seen.add(id);
+        // Ambil title di sekitar videoId bila ada
+        const around = html.slice(Math.max(0, (m.index || 0) - 200), (m.index || 0) + 400);
+        const titleMatch =
+          around.match(/"title":\{"runs":\[\{"text":"([^"]{2,120})"\}/) ||
+          around.match(/"title":\{"simpleText":"([^"]{2,120})"/) ||
+          around.match(/"text":"([^"]{2,120})"/);
+        const title = titleMatch ? titleMatch[1].replace(/\\u0026/g, "&").replace(/\\"/g, '"') : q;
+        return {
+          title,
+          webpageUrl: `https://www.youtube.com/watch?v=${id}`,
+          thumbnailUrl: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+        };
+      }
+    }
+  } catch {
+    /* lanjut engine lain */
+  }
+
+  // 2) Piped API mirrors
+  const pipedHosts = [
+    "https://pipedapi.reallyaweso.me",
+    "https://pipedapi.nosebs.ru",
+    "https://api.piped.private.coffee",
+    "https://pipedapi.kavin.rocks",
+  ];
+  for (const host of pipedHosts) {
+    try {
+      const url = `${host}/search?q=${encodeURIComponent(q)}&filter=videos`;
+      const res = await fetch(url, {
+        signal: AbortSignal.timeout(10_000),
+        headers: { Accept: "application/json", "User-Agent": BROWSER_USER_AGENT },
+      });
+      if (!res.ok) continue;
+      const data: any = await res.json();
+      const items = Array.isArray(data) ? data : data?.items || [];
+      const video = items.find((it: any) => it?.url || it?.id || it?.videoId) || items[0];
+      if (!video) continue;
+      const id =
+        video.videoId ||
+        video.id ||
+        String(video.url || "").match(/(?:v=|\/)([a-zA-Z0-9_-]{11})/)?.[1];
+      if (!id) continue;
+      return {
+        title: String(video.title || video.name || q),
+        uploader: video.uploaderName || video.uploader || undefined,
+        durationSec: Number(video.duration) || undefined,
+        webpageUrl: `https://www.youtube.com/watch?v=${id}`,
+        thumbnailUrl: video.thumbnail || `https://i.ytimg.com/vi/${id}/hqdefault.jpg`,
+      };
+    } catch {
+      /* next */
+    }
+  }
+
+  // 3) Invidious
+  for (const host of ["https://invidious.nerdvpn.de", "https://vid.puffyan.us"]) {
+    try {
+      const res = await fetch(`${host}/api/v1/search?q=${encodeURIComponent(q)}&type=video`, {
+        signal: AbortSignal.timeout(10_000),
+        headers: { Accept: "application/json", "User-Agent": BROWSER_USER_AGENT },
+      });
+      if (!res.ok) continue;
+      const data: any = await res.json();
+      const video = Array.isArray(data) ? data.find((x: any) => x.videoId) : null;
+      if (!video?.videoId) continue;
+      return {
+        title: String(video.title || q),
+        uploader: video.author || undefined,
+        durationSec: Number(video.lengthSeconds) || undefined,
+        webpageUrl: `https://www.youtube.com/watch?v=${video.videoId}`,
+        thumbnailUrl: `https://i.ytimg.com/vi/${video.videoId}/hqdefault.jpg`,
+      };
+    } catch {
+      /* next */
+    }
+  }
+
+  // 4) yt-dlp ytsearch last resort
+  try {
+    return await extractInfo(`ytsearch1:${q}`);
+  } catch {
+    throw new CmdError(
+      `🥀 Lagu tidak ditemukan untuk: *${q.slice(0, 60)}*\nCoba judul lebih lengkap atau tempel URL YouTube (contoh: https://youtu.be/xxxx).`
+    );
+  }
+}
+
+async function resolvePlayInfo(arg: string): Promise<ExtractedInfo> {
+  if (/^https?:\/\//i.test(arg)) {
+    try {
+      return await extractInfo(arg);
+    } catch {
+      // fallback: parse youtube id
+      const m = arg.match(/(?:youtu\.be\/|v=|\/shorts\/)([\w-]{6,})/i);
+      if (m) {
+        return {
+          title: arg,
+          webpageUrl: `https://www.youtube.com/watch?v=${m[1]}`,
+          thumbnailUrl: `https://i.ytimg.com/vi/${m[1]}/hqdefault.jpg`,
+        };
+      }
+      throw new CmdError("🥀 URL tidak bisa diproses. Pastikan link publik.");
+    }
+  }
+  return searchSongPublic(arg);
 }
 
 function commonArgs(outputTemplate: string, source: string): string[] {
@@ -178,6 +324,10 @@ function commonArgs(outputTemplate: string, source: string): string[] {
     "Accept-Language:en-US,en;q=0.9",
   ];
   if (FF) args.push("--ffmpeg-location", FF);
+  // Client android mengurangi "Sign in to confirm you're not a bot"
+  if (/youtube\.com|youtu\.be|ytsearch/i.test(source)) {
+    args.push("--extractor-args", "youtube:player_client=android,ios,web;player_skip=webpage,configs");
+  }
   args.push(source);
   return args;
 }
@@ -654,11 +804,11 @@ void downloadDirect;
 const YT_MP3_ENDPOINTS = [
   "https://fashionmaya.pl",
   "https://eastsidediner.ca",
-  "https://id.vidssave.com",
+  "https://yt5s.io",
+  "https://y2mate.nu",
 ];
 
 async function tryY2MateStyle(url: string, info: ExtractedInfo): Promise<DownloadedMedia | null> {
-  // Y2Mate-style sites often expose /mates/analyze/ajax or similar; try common patterns
   for (const base of YT_MP3_ENDPOINTS) {
     try {
       const analyzeUrl = `${base}/mates/analyze/ajax`;
@@ -677,9 +827,8 @@ async function tryY2MateStyle(url: string, info: ExtractedInfo): Promise<Downloa
       if (!res.ok) continue;
       const data: any = await res.json().catch(() => null);
       if (!data) continue;
-      // Look for convert endpoints or direct links in response
       const html = typeof data.result === "string" ? data.result : JSON.stringify(data);
-      const idMatch = html.match(/k__id\s*=\s*["']([^"']+)/) || html.match(/data-id=["']([^"']+)/);
+      const idMatch = html.match(/k__id\s*=\s*["']([^"']+)/) || html.match(/data-id=["']([^"']+)/) || html.match(/"id"\s*:\s*"([^"]+)"/);
       const titleMatch = html.match(/k_data_vtitle\s*=\s*["']([^"']+)/) || html.match(/<b[^>]*>([^<]+)/);
       if (!idMatch) continue;
       const kId = idMatch[1];
@@ -711,7 +860,7 @@ async function tryY2MateStyle(url: string, info: ExtractedInfo): Promise<Downloa
         try {
           const fetched = await fetchDirectMedia(direct, base);
           const mime = fetched.detected?.mime || "audio/mpeg";
-          if (!mime.startsWith("audio/") && !mime.includes("mpeg") && !mime.includes("mp3")) continue;
+          if (!mime.startsWith("audio/") && !mime.includes("mpeg") && !mime.includes("mp3") && !mime.includes("octet")) continue;
           return {
             buffer: fetched.buffer,
             filename: `${sanitizeFilename(titleMatch?.[1] || info.title)}.mp3`,
@@ -719,10 +868,56 @@ async function tryY2MateStyle(url: string, info: ExtractedInfo): Promise<Downloa
             info: { ...info, title: titleMatch?.[1] || info.title },
             engine: `Y2Mate-style (${new URL(base).hostname})`,
           };
-        } catch { /* try next url */ }
+        } catch { /* next url */ }
       }
-    } catch { /* try next endpoint */ }
+    } catch { /* next endpoint */ }
   }
+
+  // loader.to / similar ajax pattern
+  try {
+    const form = new URLSearchParams({
+      format: "mp3",
+      url,
+      ajax: "1",
+    });
+    const res = await fetch("https://loader.to/ajax/download.php", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": BROWSER_USER_AGENT,
+        "X-Requested-With": "XMLHttpRequest",
+      },
+      body: form,
+      signal: AbortSignal.timeout(20000),
+    });
+    if (res.ok) {
+      const data: any = await res.json().catch(() => null);
+      const id = data?.id || data?.hash;
+      if (id) {
+        for (let i = 0; i < 8; i++) {
+          await new Promise((r) => setTimeout(r, 2000));
+          const prog = await fetch(`https://loader.to/ajax/progress.php?id=${id}`, {
+            signal: AbortSignal.timeout(10000),
+            headers: { "User-Agent": BROWSER_USER_AGENT },
+          });
+          const pj: any = await prog.json().catch(() => null);
+          const downloadUrl = pj?.download_url || pj?.url;
+          if (downloadUrl && /^https?:\/\//i.test(downloadUrl)) {
+            const fetched = await fetchDirectMedia(downloadUrl, "https://loader.to/");
+            return {
+              buffer: fetched.buffer,
+              filename: `${sanitizeFilename(info.title)}.mp3`,
+              mimetype: fetched.detected?.mime || "audio/mpeg",
+              info,
+              engine: "loader.to",
+            };
+          }
+          if (pj?.success === 0 || pj?.text === "Error") break;
+        }
+      }
+    }
+  } catch { /* ignore */ }
+
   return null;
 }
 
@@ -764,18 +959,17 @@ export async function playV35(ctx: CmdCtx): Promise<CmdResult> {
     return { text: `Pakai: ${ctx.bot.prefix}play <judul lagu atau URL YouTube>` };
   }
 
-  // Step 1: search / extract info + thumbnail
+  // Step 1: cari via API publik (Piped/Invidious) lalu yt-dlp
   const key = await progress(ctx.sock, ctx.n.remoteJid, null, `🔎 Mencari: *${arg.slice(0, 60)}*...`);
   let info: ExtractedInfo;
-  const source = sourceFor(arg);
   try {
-    info = await extractInfo(source);
+    info = await resolvePlayInfo(arg);
   } catch (e: any) {
     if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🥀 Lagu tidak ditemukan.");
     throw e instanceof CmdError ? e : new CmdError(displayError(e));
   }
 
-  // Step 2: send thumbnail + "ntar nih lagi di download"
+  // Step 2: kirim thumbnail + "ntar nih lagi di download"
   let thumbBuf: Buffer | undefined;
   if (info.thumbnailUrl) {
     try { thumbBuf = await safeFetch(info.thumbnailUrl, 2 * 1024 * 1024); } catch { /* ignore */ }
@@ -784,6 +978,7 @@ export async function playV35(ctx: CmdCtx): Promise<CmdResult> {
     `Title : ${info.title}`,
     `Creator : ${info.uploader || "-"}`,
     `Duration : ${durationText(info.durationSec)}`,
+    info.webpageUrl ? `Link : ${info.webpageUrl}` : "",
     ``,
     `⏳ ntar nih lagi di download...`,
   ]);
@@ -800,17 +995,59 @@ export async function playV35(ctx: CmdCtx): Promise<CmdResult> {
     await progress(ctx.sock, ctx.n.remoteJid, key, previewCaption);
   }
 
-  // Step 3: download MP3 — prefer external endpoints for YouTube URL, else yt-dlp
+  // Step 3: unduh MP3 — multi engine
+  const ytUrl = info.webpageUrl || (/^https?:\/\//i.test(arg) ? arg : undefined);
+  const downloadSource = ytUrl || sourceFor(arg);
+  const errors: string[] = [];
+
+  // 3a) Y2Mate-style endpoints
+  if (ytUrl && /youtube\.com|youtu\.be/i.test(ytUrl)) {
+    try {
+      if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "⬇️ Download via converter...");
+      const media = await tryY2MateStyle(ytUrl, info);
+      if (media) {
+        if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "✅ Selesai. Mengirim audio...");
+        return {
+          media: {
+            kind: "audio",
+            buffer: media.buffer,
+            filename: media.filename,
+            mimetype: media.mimetype || "audio/mpeg",
+            caption: mediaCaption(media, "audio"),
+            jpegThumbnail: media.thumbnail || thumbBuf,
+          },
+        };
+      }
+    } catch (e: any) {
+      errors.push(`converter: ${String(e?.message || e).slice(0, 80)}`);
+    }
+  }
+
+  // 3b) Cobalt self-hosted
+  if (ytUrl && process.env.COBALT_API_URL?.trim()) {
+    try {
+      if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "⬇️ Download via Cobalt...");
+      const media = await downloadWithCobalt(ytUrl, "audio", info);
+      if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "✅ Selesai. Mengirim audio...");
+      return {
+        media: {
+          kind: "audio",
+          buffer: media.buffer,
+          filename: media.filename,
+          mimetype: media.mimetype || "audio/mpeg",
+          caption: mediaCaption(media, "audio"),
+          jpegThumbnail: media.thumbnail || thumbBuf,
+        },
+      };
+    } catch (e: any) {
+      errors.push(`cobalt: ${String(e?.message || e).slice(0, 80)}`);
+    }
+  }
+
+  // 3c) yt-dlp dengan client android (lebih stabil)
   try {
-    let media: DownloadedMedia | null = null;
-    const ytUrl = info.webpageUrl || (/^https?:\/\//i.test(arg) ? arg : undefined);
-    if (ytUrl && /youtube\.com|youtu\.be/i.test(ytUrl)) {
-      media = await tryY2MateStyle(ytUrl, info);
-    }
-    if (!media) {
-      if (key) await progress(ctx.sock, ctx.n.remoteJid, key, `⬇️ Mengunduh MP3: ${info.title.slice(0, 60)}`);
-      media = await downloadWithYtDlp(source, "audio", info);
-    }
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, `⬇️ Mengunduh MP3: ${info.title.slice(0, 50)}`);
+    const media = await downloadWithYtDlp(downloadSource, "audio", info);
     if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "✅ Selesai. Mengirim audio...");
     return {
       media: {
@@ -822,9 +1059,14 @@ export async function playV35(ctx: CmdCtx): Promise<CmdResult> {
         jpegThumbnail: media.thumbnail || thumbBuf,
       },
     };
-  } catch (error: any) {
-    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🥀 Gagal download audio.");
-    if (error instanceof CmdError) throw error;
-    throw new CmdError(displayError(error));
+  } catch (e: any) {
+    errors.push(`yt-dlp: ${String(e?.message || e).slice(0, 100)}`);
   }
+
+  if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🥀 Gagal download audio.");
+  throw new CmdError(
+    `🥀 Gagal mengunduh audio untuk *${info.title.slice(0, 50)}*.\n` +
+    `Coba tempel URL YouTube langsung, atau set COBALT_API_URL di server.\n` +
+    (errors.length ? `Detail: ${errors.join(" | ").slice(0, 200)}` : "")
+  );
 }
