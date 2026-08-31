@@ -23,6 +23,7 @@ const H: Record<string, Handler> = {
   botinfo: info.botinfo,
   owner: info.owner,
   copymenu: info.copymenu,
+  gantimenu: info.gantimenu,
 
   /* 🧰 TOOLS */
   calc: info.calc,

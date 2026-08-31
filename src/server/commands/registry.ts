@@ -245,6 +245,7 @@ export const REGISTRY: RegistryCommand[] = [
   c("clearcache", "owner", "Bersihkan state game & cache", "owner"),
   c("plugin", "owner", "Modul & jumlah command aktif", "owner"),
   c("maintenance", "owner", "Mode maintenance bot: .maintenance on|off", "owner"),
+  c("gantimenu", "owner", "Ganti style menu 1-5: .gantimenu <1-5>", "owner"),
   c("logs", "owner", "Log aktivitas bot terbaru", "owner"),
 
   /* ===================== 200 COMMAND EXPANSION ===================== */

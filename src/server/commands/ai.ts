@@ -5,14 +5,16 @@ import { CmdCtx, CmdResult, box, truncate, CmdError } from "./core";
 async function aiChat(
   system: string,
   user: string,
-  opts: { temperature?: number; maxTokens?: number; imageBase64?: string; imageMime?: string } = {}
+  opts: { temperature?: number; maxTokens?: number; imageBase64?: string; imageMime?: string; botSettings?: any } = {}
 ): Promise<string> {
-  const key = process.env.GEMINI_API_KEY || process.env.AI_API_KEY;
+  // Priority: bot settings (dashboard) > env
+  const bs = opts.botSettings || {};
+  const key = (bs.geminiApiKey || bs.aiApiKey || process.env.GEMINI_API_KEY || process.env.AI_API_KEY || "").trim();
   if (!key)
-    return "⚠️ AI belum dikonfigurasi di server (GEMINI_API_KEY belum diset). Fitur ini aktif setelah key dipasang — bukan simulasi.";
-  const usingGemini = !!process.env.GEMINI_API_KEY;
-  const base = process.env.GEMINI_API_BASE || process.env.AI_BASE_URL || (usingGemini ? "https://generativelanguage.googleapis.com/v1beta/openai" : "https://api.openai.com/v1");
-  const model = process.env.GEMINI_MODEL || process.env.AI_MODEL || "gemini-2.5-flash-lite";
+    return "⚠️ AI belum dikonfigurasi. Set GEMINI_API_KEY di .env server ATAU isi API Key AI di dashboard bot (Settings) agar lebih instan.";
+  const usingGemini = !!(bs.geminiApiKey || process.env.GEMINI_API_KEY) || /generativelanguage|gemini/i.test(String(bs.aiBaseUrl || process.env.GEMINI_API_BASE || process.env.AI_BASE_URL || ""));
+  const base = (bs.aiBaseUrl || process.env.GEMINI_API_BASE || process.env.AI_BASE_URL || (usingGemini ? "https://generativelanguage.googleapis.com/v1beta/openai" : "https://api.openai.com/v1")).replace(/\/$/, "");
+  const model = bs.aiModel || process.env.GEMINI_MODEL || process.env.AI_MODEL || "gemini-2.5-flash-lite";
   const messages: any[] = [{ role: "system", content: system }];
   if (opts.imageBase64) {
     messages.push({
@@ -46,7 +48,7 @@ const WA_SYSTEM =
 
 export async function ai(ctx: CmdCtx): Promise<CmdResult> {
   if (!ctx.arg) return { text: "Pakai: .ai <pertanyaan>" };
-  const r = await aiChat(WA_SYSTEM, ctx.arg);
+  const r = await aiChat(WA_SYSTEM, ctx.arg, { botSettings: ctx.bot.settings });
   return { text: truncate(r, 3800) };
 }
 export const ask = ai;
@@ -56,7 +58,8 @@ export async function study(ctx: CmdCtx): Promise<CmdResult> {
   if (!ctx.arg) return { text: "Pakai: .study <topik>" };
   const r = await aiChat(
     WA_SYSTEM + " Kamu mode belajar: jelaskan step-by-step dari dasar, beri contoh, dan akhiri dengan 3 pertanyaan uji.",
-    `Jelaskan topik: ${ctx.arg}`
+    `Jelaskan topik: ${ctx.arg}`,
+    { botSettings: ctx.bot.settings }
   );
   return { text: truncate(r, 3800) };
 }
@@ -64,10 +67,8 @@ export const study2 = study;
 
 export async function summarize(ctx: CmdCtx): Promise<CmdResult> {
   if (!ctx.arg) return { text: "Pakai: .summarize <teks>" };
-  const r = await aiChat(
-    WA_SYSTEM + " Ringkas teks user maksimal 5 poin singkat.",
-    ctx.arg
-  );
+  const r = await aiChat(WA_SYSTEM + " Ringkas teks user maksimal 5 poin singkat.", ctx.arg
+  , { botSettings: ctx.bot.settings });
   return { text: truncate(r, 2500) };
 }
 export const summary = summarize;
@@ -77,28 +78,22 @@ export async function rewrite(ctx: CmdCtx): Promise<CmdResult> {
   const [style, ...rest] = ctx.parts;
   const text = rest.join(" ");
   const prompt = style && !text ? `gaya ${style}` : `gaya ${style}\nteks: ${text}`;
-  const r = await aiChat(
-    WA_SYSTEM + " Tulis ulang teks dengan gaya yang diminta. Hanya hasil akhir.",
-    prompt || ctx.arg
-  );
+  const r = await aiChat(WA_SYSTEM + " Tulis ulang teks dengan gaya yang diminta. Hanya hasil akhir.", prompt || ctx.arg
+  , { botSettings: ctx.bot.settings });
   return { text: truncate(r, 3000) };
 }
 
 export async function prompt(ctx: CmdCtx): Promise<CmdResult> {
   if (!ctx.arg) return { text: "Pakai: .prompt <ide>" };
-  const r = await aiChat(
-    WA_SYSTEM + " Buat prompt detail (untuk AI chat/image generator) dari ide user. Hanya output prompt-nya.",
-    ctx.arg
-  );
+  const r = await aiChat(WA_SYSTEM + " Buat prompt detail (untuk AI chat/image generator) dari ide user. Hanya output prompt-nya.", ctx.arg
+  , { botSettings: ctx.bot.settings });
   return { text: truncate(r, 2500) };
 }
 
 export async function code(ctx: CmdCtx): Promise<CmdResult> {
   if (!ctx.arg) return { text: "Pakai: .code <permintaan kode>" };
-  const r = await aiChat(
-    WA_SYSTEM + " Kamu senior developer. Jawab dengan kode (block code) + penjelasan singkat.",
-    ctx.arg
-  );
+  const r = await aiChat(WA_SYSTEM + " Kamu senior developer. Jawab dengan kode (block code) + penjelasan singkat.", ctx.arg
+  , { botSettings: ctx.bot.settings });
   return { text: truncate(r, 3800) };
 }
 
@@ -141,11 +136,7 @@ export async function translate(ctx: CmdCtx): Promise<CmdResult> {
 export async function vision(ctx: CmdCtx): Promise<CmdResult> {
   const media = await ctx.getRepliedMedia();
   if (!media) return { text: "Reply gambar dengan .vision <pertanyaan>" };
-  const r = await aiChat(
-    WA_SYSTEM + " Kamu analis gambar. Jawab pertanyaan user tentang gambar yang diberikan.",
-    ctx.arg || "Jelaskan gambar ini.",
-    { imageBase64: media.buffer.toString("base64"), imageMime: media.mimetype }
-  );
+  const r = await aiChat(WA_SYSTEM + " Kamu analis gambar. Jawab pertanyaan user tentang gambar yang diberikan.", ctx.arg || "Jelaskan gambar ini.", { botSettings: ctx.bot.settings, imageBase64: media.buffer.toString("base64"), imageMime: media.mimetype });
   return { text: truncate(r, 3000) };
 }
 
@@ -155,7 +146,7 @@ export async function ocr(ctx: CmdCtx): Promise<CmdResult> {
   const r = await aiChat(
     "OCR engine: ekstrak SEMUA teks pada gambar secara persis, tanpa komentar. Jika tidak ada teks, jawab: (tidak ada teks)",
     "Extract all text.",
-    { imageBase64: media.buffer.toString("base64"), imageMime: media.mimetype }
+    { botSettings: ctx.bot.settings, imageBase64: media.buffer.toString("base64"), imageMime: media.mimetype }
   );
   return { text: `📝 Teks terdeteksi:\n${truncate(r, 3000)}` };
 }
@@ -164,7 +155,8 @@ export async function brat(ctx: CmdCtx): Promise<CmdResult> {
   if (!ctx.arg) return { text: "Pakai: .brat <teks> — chat dengan persona BRAT 💅" };
   const r = await aiChat(
     "Kamu persona BRAT: sok angkuh, manja, drama, tapi pada dasarnya manis. Gunakan kata 'brat', 'dude', 'iconic', emoji 💅✨😤. Jawab singkat (maks 3 kalimat) dalam bahasa Indonesia campur slang.",
-    ctx.arg
+    ctx.arg,
+    { botSettings: ctx.bot.settings }
   );
   return { text: truncate(r, 2000) };
 }
@@ -172,10 +164,8 @@ export async function brat(ctx: CmdCtx): Promise<CmdResult> {
 /* ------------------------------ EDUCATION ------------------------------ */
 export async function physics(ctx: CmdCtx): Promise<CmdResult> {
   if (!ctx.arg) return { text: "Pakai: .physics <pertanyaan fisika>" };
-  const r = await aiChat(
-    WA_SYSTEM + " Kamu tutor fisika: jelaskan konsep + rumus + contoh soal singkat.",
-    ctx.arg
-  );
+  const r = await aiChat(WA_SYSTEM + " Kamu tutor fisika: jelaskan konsep + rumus + contoh soal singkat.", ctx.arg
+  , { botSettings: ctx.bot.settings });
   return { text: truncate(r, 3000) };
 }
 
@@ -183,7 +173,8 @@ export async function chemistry(ctx: CmdCtx): Promise<CmdResult> {
   if (!ctx.arg) return { text: "Pakai: .chemistry <pertanyaan kimia>" };
   const r = await aiChat(
     WA_SYSTEM + " Kamu tutor kimia: jelaskan reaksi, persamaan, dan contoh.",
-    ctx.arg
+    ctx.arg,
+    { botSettings: ctx.bot.settings }
   );
   return { text: truncate(r, 3000) };
 }

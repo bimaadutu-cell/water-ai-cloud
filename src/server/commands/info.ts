@@ -15,7 +15,7 @@ import {
 import {
   CmdCtx,
   CmdResult,
-  buildMenu,
+  buildMenu, getMenuStyle, PROMO_TEXT,
   box,
   truncate,
   BOT_VERSION,
@@ -157,11 +157,69 @@ async function renderMenu(ctx: CmdCtx, full: boolean): Promise<CmdResult> {
 
 export async function menu(ctx: CmdCtx): Promise<CmdResult> {
   const result = await renderMenu(ctx, false);
-  return { ...result, buttons: [{ id: `${ctx.bot.prefix || "!"}allmenu`, text: "ALLMENU" }] };
+  const style = getMenuStyle(ctx.bot);
+  const p = ctx.bot.prefix || "!";
+  // Style 1: no buttons (text only)
+  if (style === 1) return result;
+  // Style 2-5: buttons supported
+  const buttons = [
+    { id: `${p}allmenu`, text: "📋 ALLMENU" },
+    { id: `${p}help`, text: "❓ HELP" },
+    { id: `${p}status`, text: "📡 STATUS" },
+  ];
+  return { ...result, buttons };
 }
 
 export async function allmenu(ctx: CmdCtx): Promise<CmdResult> {
-  return renderMenu(ctx, true);
+  const result = await renderMenu(ctx, true);
+  const style = getMenuStyle(ctx.bot);
+  if (style === 1) return result;
+  const p = ctx.bot.prefix || "!";
+  return {
+    ...result,
+    buttons: [
+      { id: `${p}menu`, text: "🏠 MENU" },
+      { id: `${p}help`, text: "❓ HELP" },
+      { id: `${p}owner`, text: "👑 OWNER" },
+    ],
+  };
+}
+
+export async function gantimenu(ctx: CmdCtx): Promise<CmdResult> {
+  const arg = (ctx.arg || "").trim();
+  if (!arg || !/^[1-5]$/.test(arg)) {
+    const current = getMenuStyle(ctx.bot);
+    return {
+      text: box("🎨 GANTI MENU (Owner)", [
+        `Style saat ini: *${current}*`,
+        ``,
+        `*1* — Default (tanpa tombol)`,
+        `*2* — Struktur keren + text menyala + tombol`,
+        `*3* — Elegan + tombol`,
+        `*4* — Neon keren + tombol`,
+        `*5* — Maksimal keren keren keren + tombol`,
+        ``,
+        `Pakai: ${ctx.bot.prefix}gantimenu <1-5>`,
+      ]),
+    };
+  }
+  const style = Number(arg);
+  // Persist to bot.settings.menuStyle
+  const { db } = await import("@/db");
+  const { bots } = await import("@/db/schema");
+  const { eq } = await import("drizzle-orm");
+  const currentSettings = (ctx.bot.settings as any) || {};
+  const newSettings = { ...currentSettings, menuStyle: style };
+  await db.update(bots).set({ settings: newSettings }).where(eq(bots.id, ctx.bot.id));
+  // Update in-memory
+  (ctx.bot as any).settings = newSettings;
+  return {
+    text: box("✅ MENU DIGANTI", [
+      `Style menu sekarang: *${style}*`,
+      style === 1 ? "Mode teks polos (tanpa tombol)." : "Mode dengan tombol interaktif WhatsApp.",
+      `Ketik ${ctx.bot.prefix}menu untuk melihat hasilnya.`,
+    ]),
+  };
 }
 
 export async function help(ctx: CmdCtx): Promise<CmdResult> {

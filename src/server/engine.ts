@@ -1043,18 +1043,37 @@ async function handleIncoming(rb: RunningBot, bot: BotRow, m: any) {
 }
 
 async function sendInteractive(rb: RunningBot, to: string, text: string, buttons: { id: string; text: string }[]) {
+  const limited = buttons.slice(0, 3); // WA legacy buttons max 3
+  // Try modern interactive message first, then legacy buttons, then plain text fallback
+  try {
+    const interactiveMsg = {
+      viewOnce: false,
+      interactiveButtons: limited.map((b) => ({
+        name: "quick_reply",
+        buttonParamsJson: JSON.stringify({ display_text: b.text, id: b.id }),
+      })),
+    };
+    await rb.sock.sendMessage(to, {
+      text,
+      footer: "WATER AI CLOUD V3.5",
+      interactiveButtons: interactiveMsg.interactiveButtons,
+    } as any);
+    await recordOut(rb, to, "text", text);
+    return;
+  } catch { /* try legacy */ }
   try {
     await rb.sock.sendMessage(to, {
       text,
-      footer: "WATER AI CLOUD",
-      buttons: buttons.map((button) => ({ buttonId: button.id, buttonText: { displayText: button.text }, type: 1 })),
+      footer: "WATER AI CLOUD V3.5",
+      buttons: limited.map((button) => ({ buttonId: button.id, buttonText: { displayText: button.text.slice(0, 20) }, type: 1 })),
       headerType: 1,
     });
     await recordOut(rb, to, "text", text);
-  } catch {
-    // Some WhatsApp clients disable legacy interactive buttons; text remains reliable.
-    await sendInternal(rb, to, text);
-  }
+    return;
+  } catch { /* plain text */ }
+  // Fallback: append button hints as text so user can still tap/type
+  const hints = limited.map((b) => `› ${b.text} → ketik *${b.id}*`).join("\n");
+  await sendInternal(rb, to, `${text}\n\n${hints}`);
 }
 
 async function sendInternal(rb: RunningBot, to: string, text: string) {

@@ -553,22 +553,78 @@ async function instagramCommand(ctx: CmdCtx, mode: "image" | "video" | "any"): P
 }
 
 export async function play(ctx: CmdCtx): Promise<CmdResult> {
-  return downloadCommand(ctx, "audio");
+  return playV35(ctx);
 }
 
 export const song = play;
 export const audioCmd = play;
+export const ytmp3 = play;
 
 export async function video(ctx: CmdCtx): Promise<CmdResult> {
   return downloadCommand(ctx, "video");
 }
 
 export const tiktok = video;
-export async function instagram(ctx: CmdCtx): Promise<CmdResult> { return instagramCommand(ctx, "any"); }
-export async function igdl(ctx: CmdCtx): Promise<CmdResult> { return instagramCommand(ctx, "any"); }
-export async function instagramvideo(ctx: CmdCtx): Promise<CmdResult> { return instagramCommand(ctx, "video"); }
-export async function instagramphoto(ctx: CmdCtx): Promise<CmdResult> { return instagramCommand(ctx, "image"); }
+export const ytmp4 = video;
+export const ttdl = video;
 export const youtube = video;
+
+export async function instagram(ctx: CmdCtx): Promise<CmdResult> {
+  const arg = ctx.arg.trim();
+  if (!arg) return { text: `❌ URL Instagram belum diberikan.\n\nContoh: ${ctx.bot.prefix}instagram https://www.instagram.com/reel/xxxxx/` };
+  let url: URL;
+  try { url = new URL(arg); } catch { return { text: "❌ URL Instagram tidak valid." }; }
+  if (!/(^|\.)instagram\.com$/i.test(url.hostname)) return { text: "❌ Gunakan URL Instagram yang valid." };
+  const key = await progress(ctx.sock, ctx.n.remoteJid, null, "🔎 Menganalisis URL Instagram (multi-engine)...");
+  try {
+    const items = await downloadInstagramWithFallbacks(url.toString(), "any", { title: `Instagram ${url.pathname}`, webpageUrl: url.toString() });
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, `✅ ${items.length} media tervalidasi. Mengirim...`);
+    return {
+      media: items.map((item, index) => ({
+        kind: (item.kind === "image" ? "image" : "video") as "image" | "video",
+        buffer: item.buffer,
+        filename: item.filename,
+        mimetype: item.mimetype,
+        caption: `${index + 1}/${items.length} • ${item.kind === "image" ? "IMAGE" : "VIDEO"} • ${item.engine || "Instagram"}`,
+      })),
+    };
+  } catch (error: any) {
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "❌ Media Instagram gagal diproses.");
+    if (error instanceof CmdError) throw error;
+    throw new CmdError("❌ Media Instagram gagal. Pastikan URL publik (bukan private).");
+  }
+}
+export async function igdl(ctx: CmdCtx): Promise<CmdResult> { return instagram(ctx); }
+export async function instagramvideo(ctx: CmdCtx): Promise<CmdResult> {
+  const arg = ctx.arg.trim();
+  if (!arg) return { text: `Pakai: ${ctx.bot.prefix}instagramvideo <URL>` };
+  let url: URL;
+  try { url = new URL(arg); } catch { return { text: "❌ URL tidak valid." }; }
+  const key = await progress(ctx.sock, ctx.n.remoteJid, null, "🔎 Download video Instagram...");
+  try {
+    const items = await downloadInstagramWithFallbacks(url.toString(), "video", { title: "IG Video", webpageUrl: url.toString() });
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "✅ Mengirim...");
+    return { media: items.map((item) => ({ kind: "video" as const, buffer: item.buffer, filename: item.filename, mimetype: item.mimetype, caption: item.engine })) };
+  } catch (e: any) {
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "❌ Gagal.");
+    throw e instanceof CmdError ? e : new CmdError(String(e?.message || e));
+  }
+}
+export async function instagramphoto(ctx: CmdCtx): Promise<CmdResult> {
+  const arg = ctx.arg.trim();
+  if (!arg) return { text: `Pakai: ${ctx.bot.prefix}instagramphoto <URL>` };
+  let url: URL;
+  try { url = new URL(arg); } catch { return { text: "❌ URL tidak valid." }; }
+  const key = await progress(ctx.sock, ctx.n.remoteJid, null, "🔎 Download foto Instagram...");
+  try {
+    const items = await downloadInstagramWithFallbacks(url.toString(), "image", { title: "IG Photo", webpageUrl: url.toString() });
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "✅ Mengirim...");
+    return { media: items.map((item) => ({ kind: "image" as const, buffer: item.buffer, filename: item.filename, mimetype: item.mimetype, caption: item.engine })) };
+  } catch (e: any) {
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "❌ Gagal.");
+    throw e instanceof CmdError ? e : new CmdError(String(e?.message || e));
+  }
+}
 
 export async function media(ctx: CmdCtx): Promise<CmdResult> {
   const arg = ctx.arg.trim();
@@ -593,3 +649,182 @@ export async function downloadDirect(url: string): Promise<Buffer> {
 // Prevent accidental unused import regressions when the helper is consumed by
 // an external integration through tree-shaking.
 void downloadDirect;
+
+/* ===== V3.5 UPGRADE: external MP3 endpoints + improved play flow ===== */
+const YT_MP3_ENDPOINTS = [
+  "https://fashionmaya.pl",
+  "https://eastsidediner.ca",
+  "https://id.vidssave.com",
+];
+
+async function tryY2MateStyle(url: string, info: ExtractedInfo): Promise<DownloadedMedia | null> {
+  // Y2Mate-style sites often expose /mates/analyze/ajax or similar; try common patterns
+  for (const base of YT_MP3_ENDPOINTS) {
+    try {
+      const analyzeUrl = `${base}/mates/analyze/ajax`;
+      const form = new URLSearchParams({ url, q_auto: "0", ajax: "1" });
+      const res = await fetch(analyzeUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+          "X-Requested-With": "XMLHttpRequest",
+          "User-Agent": BROWSER_USER_AGENT,
+          Referer: base + "/",
+        },
+        body: form,
+        signal: AbortSignal.timeout(25000),
+      });
+      if (!res.ok) continue;
+      const data: any = await res.json().catch(() => null);
+      if (!data) continue;
+      // Look for convert endpoints or direct links in response
+      const html = typeof data.result === "string" ? data.result : JSON.stringify(data);
+      const idMatch = html.match(/k__id\s*=\s*["']([^"']+)/) || html.match(/data-id=["']([^"']+)/);
+      const titleMatch = html.match(/k_data_vtitle\s*=\s*["']([^"']+)/) || html.match(/<b[^>]*>([^<]+)/);
+      if (!idMatch) continue;
+      const kId = idMatch[1];
+      const convertForm = new URLSearchParams({
+        type: "youtube",
+        _id: kId,
+        v_id: kId,
+        ajax: "1",
+        token: "",
+        ftype: "mp3",
+        fquality: "128",
+      });
+      const convertRes = await fetch(`${base}/mates/convert`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+          "X-Requested-With": "XMLHttpRequest",
+          "User-Agent": BROWSER_USER_AGENT,
+          Referer: base + "/",
+        },
+        body: convertForm,
+        signal: AbortSignal.timeout(45000),
+      });
+      if (!convertRes.ok) continue;
+      const convertData: any = await convertRes.json().catch(() => null);
+      const resultHtml = typeof convertData?.result === "string" ? convertData.result : JSON.stringify(convertData || {});
+      const urls = mediaUrls(resultHtml);
+      for (const direct of urls.slice(0, 5)) {
+        try {
+          const fetched = await fetchDirectMedia(direct, base);
+          const mime = fetched.detected?.mime || "audio/mpeg";
+          if (!mime.startsWith("audio/") && !mime.includes("mpeg") && !mime.includes("mp3")) continue;
+          return {
+            buffer: fetched.buffer,
+            filename: `${sanitizeFilename(titleMatch?.[1] || info.title)}.mp3`,
+            mimetype: "audio/mpeg",
+            info: { ...info, title: titleMatch?.[1] || info.title },
+            engine: `Y2Mate-style (${new URL(base).hostname})`,
+          };
+        } catch { /* try next url */ }
+      }
+    } catch { /* try next endpoint */ }
+  }
+  return null;
+}
+
+async function downloadInstagramWithFallbacks(url: string, mode: "image" | "video" | "any", info: ExtractedInfo): Promise<DownloadedMedia[]> {
+  const errors: string[] = [];
+  // 1) yt-dlp
+  try {
+    return await downloadInstagramMedia(url, mode, info);
+  } catch (e: any) {
+    errors.push(`yt-dlp: ${String(e?.message || e).slice(0, 120)}`);
+  }
+  // 2) Snap-Insta / web services
+  try {
+    const media = await downloadWithWebServices(url, mode === "image" ? "video" : "video", info);
+    if (media) {
+      const kind = mediaKind(media.mimetype);
+      if (mode === "image" && kind !== "image") throw new Error("bukan image");
+      if (mode === "video" && kind !== "video") throw new Error("bukan video");
+      return [media];
+    }
+  } catch (e: any) {
+    errors.push(`web: ${String(e?.message || e).slice(0, 120)}`);
+  }
+  // 3) Cobalt fallback
+  if (process.env.COBALT_API_URL?.trim()) {
+    try {
+      const media = await downloadWithCobalt(url, mode === "image" ? "video" : "video", info);
+      return [media];
+    } catch (e: any) {
+      errors.push(`cobalt: ${String(e?.message || e).slice(0, 120)}`);
+    }
+  }
+  throw new CmdError(`❌ Instagram gagal di semua engine. ${errors.join(" | ")}`);
+}
+
+export async function playV35(ctx: CmdCtx): Promise<CmdResult> {
+  const arg = ctx.arg.trim();
+  if (!arg) {
+    return { text: `Pakai: ${ctx.bot.prefix}play <judul lagu atau URL YouTube>` };
+  }
+
+  // Step 1: search / extract info + thumbnail
+  const key = await progress(ctx.sock, ctx.n.remoteJid, null, `🔎 Mencari: *${arg.slice(0, 60)}*...`);
+  let info: ExtractedInfo;
+  const source = sourceFor(arg);
+  try {
+    info = await extractInfo(source);
+  } catch (e: any) {
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🥀 Lagu tidak ditemukan.");
+    throw e instanceof CmdError ? e : new CmdError(displayError(e));
+  }
+
+  // Step 2: send thumbnail + "ntar nih lagi di download"
+  let thumbBuf: Buffer | undefined;
+  if (info.thumbnailUrl) {
+    try { thumbBuf = await safeFetch(info.thumbnailUrl, 2 * 1024 * 1024); } catch { /* ignore */ }
+  }
+  const previewCaption = box("🎵 DITEMUKAN", [
+    `Title : ${info.title}`,
+    `Creator : ${info.uploader || "-"}`,
+    `Duration : ${durationText(info.durationSec)}`,
+    ``,
+    `⏳ ntar nih lagi di download...`,
+  ]);
+  if (thumbBuf) {
+    try {
+      await ctx.sock.sendMessage(ctx.n.remoteJid, {
+        image: thumbBuf,
+        caption: previewCaption,
+      });
+    } catch {
+      if (key) await progress(ctx.sock, ctx.n.remoteJid, key, previewCaption);
+    }
+  } else if (key) {
+    await progress(ctx.sock, ctx.n.remoteJid, key, previewCaption);
+  }
+
+  // Step 3: download MP3 — prefer external endpoints for YouTube URL, else yt-dlp
+  try {
+    let media: DownloadedMedia | null = null;
+    const ytUrl = info.webpageUrl || (/^https?:\/\//i.test(arg) ? arg : undefined);
+    if (ytUrl && /youtube\.com|youtu\.be/i.test(ytUrl)) {
+      media = await tryY2MateStyle(ytUrl, info);
+    }
+    if (!media) {
+      if (key) await progress(ctx.sock, ctx.n.remoteJid, key, `⬇️ Mengunduh MP3: ${info.title.slice(0, 60)}`);
+      media = await downloadWithYtDlp(source, "audio", info);
+    }
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "✅ Selesai. Mengirim audio...");
+    return {
+      media: {
+        kind: "audio",
+        buffer: media.buffer,
+        filename: media.filename,
+        mimetype: media.mimetype || "audio/mpeg",
+        caption: mediaCaption(media, "audio"),
+        jpegThumbnail: media.thumbnail || thumbBuf,
+      },
+    };
+  } catch (error: any) {
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🥀 Gagal download audio.");
+    if (error instanceof CmdError) throw error;
+    throw new CmdError(displayError(error));
+  }
+}

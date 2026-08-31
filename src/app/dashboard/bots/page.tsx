@@ -36,7 +36,7 @@ type Bot = {
   lastActivityAt: string | null;
   engine: boolean;
   wa: { status: string; phoneNumber: string | null; lastConnectedAt: string | null } | null;
-  settings?: { menuPhotoUrl?: string };
+  settings?: { menuPhotoUrl?: string; geminiApiKey?: string; aiApiKey?: string; aiModel?: string; aiBaseUrl?: string; menuStyle?: number };
 };
 
 function BotsInner() {
@@ -50,7 +50,7 @@ function BotsInner() {
 
   const [form, setForm] = useState({ name: "", prefix: "!", ownerNumber: "", description: "" });
   const [newName, setNewName] = useState("");
-  const [cfg, setCfg] = useState({ prefix: "!", ownerNumber: "", description: "", menuPhotoUrl: "" });
+  const [cfg, setCfg] = useState({ prefix: "!", ownerNumber: "", description: "", menuPhotoUrl: "", geminiApiKey: "", aiModel: "", menuStyle: "1" });
 
   useEffect(() => {
     const fn = () => reload();
@@ -116,7 +116,7 @@ function BotsInner() {
   };
 
   const openConfig = (b: Bot) => {
-    setCfg({ prefix: b.prefix, ownerNumber: b.ownerNumber ?? "", description: b.description ?? "", menuPhotoUrl: b.settings?.menuPhotoUrl ?? "" });
+    setCfg({ prefix: b.prefix, ownerNumber: b.ownerNumber ?? "", description: b.description ?? "", menuPhotoUrl: b.settings?.menuPhotoUrl ?? "", geminiApiKey: b.settings?.geminiApiKey ?? "", aiModel: b.settings?.aiModel ?? "", menuStyle: String(b.settings?.menuStyle ?? 1) });
     setConfiguring(b);
   };
 
@@ -124,7 +124,7 @@ function BotsInner() {
     if (!configuring) return;
     setBusy("config");
     try {
-      await api(`/dashboard/bots/${configuring.id}/update`, "POST", { prefix: cfg.prefix, ownerNumber: cfg.ownerNumber, description: cfg.description, settings: { menuPhotoUrl: cfg.menuPhotoUrl } });
+      await api(`/dashboard/bots/${configuring.id}/update`, "POST", { prefix: cfg.prefix, ownerNumber: cfg.ownerNumber, description: cfg.description, settings: { menuPhotoUrl: cfg.menuPhotoUrl, geminiApiKey: cfg.geminiApiKey || undefined, aiModel: cfg.aiModel || undefined, menuStyle: Number(cfg.menuStyle) || 1 } });
       toast("Konfigurasi disimpan");
       setConfiguring(null);
       reload();
@@ -346,6 +346,18 @@ function BotsInner() {
           </Field>
           <Field label="Foto Menu (URL HTTPS)">
             <input className="input" value={cfg.menuPhotoUrl} onChange={(e) => setCfg({ ...cfg, menuPhotoUrl: e.target.value })} placeholder="https://contoh.com/menu.jpg" maxLength={2000} />
+            <label className="mt-2 block text-[10px] uppercase tracking-wider text-slate-500">Gemini / AI API Key (opsional, override .env)</label>
+            <input className="input" type="password" value={cfg.geminiApiKey} onChange={(e) => setCfg({ ...cfg, geminiApiKey: e.target.value })} placeholder="AIza... atau sk-..." maxLength={200} />
+            <label className="mt-2 block text-[10px] uppercase tracking-wider text-slate-500">AI Model</label>
+            <input className="input" value={cfg.aiModel} onChange={(e) => setCfg({ ...cfg, aiModel: e.target.value })} placeholder="gemini-2.5-flash-lite" maxLength={80} />
+            <label className="mt-2 block text-[10px] uppercase tracking-wider text-slate-500">Menu Style (1-5)</label>
+            <select className="input" value={cfg.menuStyle} onChange={(e) => setCfg({ ...cfg, menuStyle: e.target.value })}>
+              <option value="1">1 — Default (tanpa tombol)</option>
+              <option value="2">2 — Keren + text menyala</option>
+              <option value="3">3 — Elegan</option>
+              <option value="4">4 — Neon keren</option>
+              <option value="5">5 — Maksimal keren</option>
+            </select>
             <p className="mt-1 text-[10px] text-slate-600">Foto ini akan dikirim sebagai gambar pada .menu dan .allmenu. Kosongkan untuk kembali ke menu teks.</p>
           </Field>
           <div className="rounded-lg bg-white/[0.03] px-3 py-2.5 text-[11px] text-slate-500">

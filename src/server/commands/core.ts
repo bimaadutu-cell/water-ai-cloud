@@ -62,6 +62,25 @@ export class CmdError extends Error {}
 
 /* ------------------------------- constants ------------------------------ */
 export const BOT_VERSION = "V3.5";
+
+export const PROMO_TEXT = `
+━━━━━━━━━━━━━━━━━━━━
+✨ *bot WhatsApp instan onlinee 24 nonstop?*
+coba aja *WATER AI CLOUD V3.5*
+
+Server 1: https://water-ai-cloud-v2.up.railway.app
+Server 2: https://water-ai-cloud-newv.up.railway.app
+
+silakan di coba😊
+Jika ada kendala atau mau nanya sihlakan hubungi developer
+
+Telegram: @b1mxzstore
+WhatsApp: wa.me//+6283115955196
+
+Thanks atas perhatian nya😊🙏
+━━━━━━━━━━━━━━━━━━━━
+`.trim();
+
 export const MAX_FILE_BYTES = 50 * 1024 * 1024; // 50 MB
 const PREMIUM_DAILY_FREE = 10;
 const HARD_DAILY_LIMIT = 200;
@@ -252,6 +271,11 @@ export async function todayUsed(botId: string, jid: string): Promise<number> {
 }
 
 /* ------------------------------ menu builder ---------------------------- */
+export function getMenuStyle(bot: (typeof bots.$inferSelect)): number {
+  const s = Number((bot.settings as any)?.menuStyle ?? 1);
+  return s >= 1 && s <= 5 ? s : 1;
+}
+
 export function buildMenu(
   bot: (typeof bots.$inferSelect),
   username: string,
@@ -260,6 +284,7 @@ export function buildMenu(
   full = false
 ): string {
   const p = (bot.prefix || "!").trim();
+  const style = getMenuStyle(bot);
   const statusMap: Record<string, string> = {
     online: "Online",
     connecting: "Connecting",
@@ -274,52 +299,108 @@ export function buildMenu(
     list.push(`${p}${cmd.name}`);
     byCat.set(cmd.category, list);
   }
+
   const L: string[] = [];
-  L.push("*💧 WATER AI CLOUD*");
-  L.push("");
-  L.push(`👋 Halo, @${username}`);
-  L.push("");
-  L.push("_Advanced WhatsApp AI Assistant_");
-  L.push("_Fast • Stable • Powerful_");
-  L.push("");
-  L.push("╭─「 *BOT INFO* 」");
-  L.push("│");
-  L.push(`│ ◦ *Prefix* : ${p}`);
-  L.push(`│ ◦ *Version* : ${BOT_VERSION}`);
-  L.push(`│ ◦ *Status* : ${statusMap[bot.status] ?? bot.status}`);
-  L.push(`│ ◦ *Owner* : ${ownerNumbers[0] ?? bot.ownerNumber ?? "-"}`);
-  L.push("│");
-  L.push("╰────────────────────");
+  if (style === 1) {
+    L.push("*💧 WATER AI CLOUD*");
+    L.push("");
+    L.push(`👋 Halo, @${username}`);
+    L.push("");
+    L.push("_Advanced WhatsApp AI Assistant_");
+    L.push("_Fast • Stable • Powerful_");
+    L.push("");
+    L.push("╭─「 *BOT INFO* 」");
+    L.push("│");
+    L.push(`│ ◦ *Prefix* : ${p}`);
+    L.push(`│ ◦ *Version* : ${BOT_VERSION}`);
+    L.push(`│ ◦ *Status* : ${statusMap[bot.status] ?? bot.status}`);
+    L.push(`│ ◦ *Owner* : ${ownerNumbers[0] ?? bot.ownerNumber ?? "-"}`);
+    L.push("│");
+    L.push("╰────────────────────");
+  } else if (style === 2) {
+    L.push("✦━━━━━━━━━━━━━━━━━━━✦");
+    L.push("   *💧 W A T E R  A I  C L O U D*");
+    L.push("✦━━━━━━━━━━━━━━━━━━━✦");
+    L.push(`✨ Halo *${username}*`);
+    L.push(`⚡ Prefix: *${p}* | Ver: *${BOT_VERSION}*`);
+    L.push(`📡 Status: *${statusMap[bot.status] ?? bot.status}*`);
+  } else if (style === 3) {
+    L.push("╔══════════════════════╗");
+    L.push("║  💧 *WATER AI CLOUD*  ║");
+    L.push("╚══════════════════════╝");
+    L.push(`Selamat datang, *${username}*`);
+    L.push(`▸ Prefix  : ${p}`);
+    L.push(`▸ Version : ${BOT_VERSION}`);
+    L.push(`▸ Status  : ${statusMap[bot.status] ?? bot.status}`);
+    L.push(`▸ Owner   : ${ownerNumbers[0] ?? bot.ownerNumber ?? "-"}`);
+    L.push("────────────────────────");
+  } else if (style === 4) {
+    L.push("▣■■■■■■■■■■■■■■■■■■▣");
+    L.push("  ⚡ *WATER AI CLOUD* ⚡");
+    L.push("▣■■■■■■■■■■■■■■■■■■▣");
+    L.push(`👤 *${username}* | 🔖 *${BOT_VERSION}*`);
+    L.push(`🔗 ${p}  •  ${statusMap[bot.status] ?? bot.status}`);
+  } else {
+    L.push("✦･ﾟ✧*･ﾟ✧ WATER AI CLOUD ✧･ﾟ*✧･ﾟ✦");
+    L.push(`🌟 *Halo ${username}* 🌟`);
+    L.push(`💎 Version *${BOT_VERSION}*  •  Prefix *${p}*`);
+    L.push(`🚀 Status: *${statusMap[bot.status] ?? bot.status}*`);
+    L.push("･ﾟ✧･ﾟ✧･ﾟ✧･ﾟ✧･ﾟ✧･ﾟ✧･ﾟ✧･ﾟ✧");
+  }
+
   if (full) {
     for (const cat of CATEGORIES) {
       const cmds = byCat.get(cat.id);
       if (!cmds || !cmds.length) continue;
       L.push("");
-      L.push(`╭─「 *${cat.emoji} ${cat.label}* 」`);
-      L.push("│");
-      for (const cmd of cmds) L.push(`│ ◦ *${cmd}*`);
-      L.push("│");
-      L.push("╰────────────────────");
+      if (style === 1) {
+        L.push(`╭─「 *${cat.emoji} ${cat.label}* 」`);
+        L.push("│");
+        for (const cmd of cmds) L.push(`│ ◦ *${cmd}*`);
+        L.push("│");
+        L.push("╰────────────────────");
+      } else if (style === 2) {
+        L.push(`✧ *${cat.emoji} ${cat.label}*`);
+        for (const cmd of cmds) L.push(`  › *${cmd}*`);
+      } else if (style === 3) {
+        L.push(`『 ${cat.emoji} ${cat.label} 』`);
+        for (const cmd of cmds) L.push(`  • ${cmd}`);
+      } else if (style === 4) {
+        L.push(`◆ ${cat.emoji} *${cat.label}*`);
+        for (const cmd of cmds) L.push(`  ◇ ${cmd}`);
+      } else {
+        L.push(`✨ *${cat.emoji} ${cat.label}* ✨`);
+        for (const cmd of cmds) L.push(`  ⭐ *${cmd}*`);
+      }
     }
   } else {
     L.push("");
-    L.push("╭─「 *📚 KATEGORI COMMAND* 」");
-    L.push("│");
-    for (const cat of CATEGORIES) {
-      const cmds = byCat.get(cat.id);
-      if (cmds?.length) L.push(`│ ◦ *${cat.emoji} ${cat.label}* — ${cmds.length} command`);
+    if (style === 1) {
+      L.push("╭─「 *📚 KATEGORI COMMAND* 」");
+      L.push("│");
+      for (const cat of CATEGORIES) {
+        const cmds = byCat.get(cat.id);
+        if (cmds?.length) L.push(`│ ◦ *${cat.emoji} ${cat.label}* — ${cmds.length} command`);
+      }
+      L.push("│");
+      L.push(`│ ◦ Ketik *${p}allmenu* untuk melihat semua command`);
+      L.push("╰────────────────────");
+    } else {
+      for (const cat of CATEGORIES) {
+        const cmds = byCat.get(cat.id);
+        if (cmds?.length) L.push(`${cat.emoji} *${cat.label}* — ${cmds.length}`);
+      }
+      L.push(`\nKetik *${p}allmenu* untuk semua command`);
     }
-    L.push("│");
-    L.push(`│ ◦ Ketik *${p}allmenu* untuk melihat semua command`);
-    L.push("╰────────────────────");
   }
   L.push("");
-  L.push("━━━━━━━━━━━━━━━━━━━━");
-  L.push("*💧 WATER AI CLOUD*");
-  L.push("_Powerful • Fast • Modern_");
-  L.push("━━━━━━━━━━━━━━━━━━━━");
+  L.push(PROMO_TEXT);
   return L.join("\n");
 }
+
+
+
+
 
 /* -------------------------------- helpers ------------------------------- */
 export function box(title: string, lines: (string | null | undefined | false)[]): string {
