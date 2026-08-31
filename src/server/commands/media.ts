@@ -694,8 +694,10 @@ export async function tourl(ctx: CmdCtx): Promise<CmdResult> {
     const mime = detected?.mime || quoted.mimetype || "application/octet-stream";
     const form = new FormData();
     form.append("reqtype", "fileupload");
-    const blob = new Blob([quoted.buffer], { type: mime });
-    form.append("fileToUpload", blob, `waterai.${ext}`);
+    // Salin ke Uint8Array murni agar TypeScript menerima sebagai BlobPart
+    const bytes = Uint8Array.from(quoted.buffer);
+    const file = new File([bytes], `waterai.${ext}`, { type: mime });
+    form.append("fileToUpload", file);
     const res = await fetch("https://catbox.moe/user/api.php", {
       method: "POST",
       body: form,
