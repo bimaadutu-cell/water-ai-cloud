@@ -36,7 +36,7 @@ type Bot = {
   lastActivityAt: string | null;
   engine: boolean;
   wa: { status: string; phoneNumber: string | null; lastConnectedAt: string | null } | null;
-  settings?: { menuPhotoUrl?: string; geminiApiKey?: string; aiApiKey?: string; aiModel?: string; aiBaseUrl?: string; menuStyle?: number; e2bApiKey?: string; aiBaseUrl?: string };
+  settings?: { menuPhotoUrl?: string; geminiApiKey?: string; aiApiKey?: string; aiModel?: string; aiBaseUrl?: string; menuStyle?: number; e2bApiKey?: string };
 };
 
 function BotsInner() {
