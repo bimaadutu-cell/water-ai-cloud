@@ -1,6 +1,8 @@
 import sharp from "sharp";
+import fs from "fs";
+import path from "path";
 import type { CmdCtx, CmdResult } from "./core";
-import { CmdError, MAX_FILE_BYTES } from "./core";
+import { CmdError, MAX_FILE_BYTES, box, progress, tmpDir } from "./core";
 import * as ai from "./ai";
 import * as media from "./media";
 import * as dl from "./downloader";
@@ -70,11 +72,6 @@ export async function extendedCommand(ctx: CmdCtx): Promise<CmdResult> {
   return { text: `⚠️ Command *${ctx.bot.prefix}${ctx.cmd.name}* membutuhkan input atau media yang sesuai. Gunakan ${ctx.bot.prefix}help untuk format lengkap.` };
 }
 
-
-import { CmdCtx, CmdResult, box, progress, CmdError } from "./core";
-import fs from "fs";
-import path from "path";
-import { tmpDir } from "./core";
 
 /** Deploy ZIP (reply dokumen .zip) ke E2B sandbox — URL hidup ~3 jam */
 export async function sandboxdeploy(ctx: CmdCtx): Promise<CmdResult> {
