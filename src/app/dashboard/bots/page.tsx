@@ -36,7 +36,7 @@ type Bot = {
   lastActivityAt: string | null;
   engine: boolean;
   wa: { status: string; phoneNumber: string | null; lastConnectedAt: string | null } | null;
-  settings?: { menuPhotoUrl?: string; geminiApiKey?: string; aiApiKey?: string; aiModel?: string; aiBaseUrl?: string; menuStyle?: number };
+  settings?: { menuPhotoUrl?: string; geminiApiKey?: string; aiApiKey?: string; aiModel?: string; aiBaseUrl?: string; menuStyle?: number; e2bApiKey?: string; aiBaseUrl?: string };
 };
 
 function BotsInner() {
@@ -50,7 +50,7 @@ function BotsInner() {
 
   const [form, setForm] = useState({ name: "", prefix: "!", ownerNumber: "", description: "" });
   const [newName, setNewName] = useState("");
-  const [cfg, setCfg] = useState({ prefix: "!", ownerNumber: "", description: "", menuPhotoUrl: "", geminiApiKey: "", aiModel: "", menuStyle: "1" });
+  const [cfg, setCfg] = useState({ prefix: "!", ownerNumber: "", description: "", menuPhotoUrl: "", geminiApiKey: "", aiModel: "", menuStyle: "1", e2bApiKey: "", aiBaseUrl: "" });
 
   useEffect(() => {
     const fn = () => reload();
@@ -116,7 +116,7 @@ function BotsInner() {
   };
 
   const openConfig = (b: Bot) => {
-    setCfg({ prefix: b.prefix, ownerNumber: b.ownerNumber ?? "", description: b.description ?? "", menuPhotoUrl: b.settings?.menuPhotoUrl ?? "", geminiApiKey: b.settings?.geminiApiKey ?? "", aiModel: b.settings?.aiModel ?? "", menuStyle: String(b.settings?.menuStyle ?? 1) });
+    setCfg({ prefix: b.prefix, ownerNumber: b.ownerNumber ?? "", description: b.description ?? "", menuPhotoUrl: b.settings?.menuPhotoUrl ?? "", geminiApiKey: b.settings?.geminiApiKey ?? "", aiModel: b.settings?.aiModel ?? "", menuStyle: String(b.settings?.menuStyle ?? 1), e2bApiKey: b.settings?.e2bApiKey ?? "", aiBaseUrl: b.settings?.aiBaseUrl ?? "" });
     setConfiguring(b);
   };
 
@@ -124,7 +124,7 @@ function BotsInner() {
     if (!configuring) return;
     setBusy("config");
     try {
-      await api(`/dashboard/bots/${configuring.id}/update`, "POST", { prefix: cfg.prefix, ownerNumber: cfg.ownerNumber, description: cfg.description, settings: { menuPhotoUrl: cfg.menuPhotoUrl, geminiApiKey: cfg.geminiApiKey || undefined, aiModel: cfg.aiModel || undefined, menuStyle: Number(cfg.menuStyle) || 1 } });
+      await api(`/dashboard/bots/${configuring.id}/update`, "POST", { prefix: cfg.prefix, ownerNumber: cfg.ownerNumber, description: cfg.description, settings: { menuPhotoUrl: cfg.menuPhotoUrl, geminiApiKey: cfg.geminiApiKey || undefined, aiModel: cfg.aiModel || undefined, menuStyle: Number(cfg.menuStyle) || 1, e2bApiKey: cfg.e2bApiKey || undefined, aiBaseUrl: cfg.aiBaseUrl || undefined } });
       toast("Konfigurasi disimpan");
       setConfiguring(null);
       reload();
@@ -358,6 +358,11 @@ function BotsInner() {
               <option value="4">4 — Neon keren</option>
               <option value="5">5 — Maksimal keren</option>
             </select>
+            <label className="mt-2 block text-[10px] uppercase tracking-wider text-slate-500">AI Base URL (opsional, untuk key AQ/proxy)</label>
+            <input className="input" value={cfg.aiBaseUrl || ""} onChange={(e) => setCfg({ ...cfg, aiBaseUrl: e.target.value })} placeholder="https://api.openai.com/v1" maxLength={300} />
+            <label className="mt-2 block text-[10px] uppercase tracking-wider text-slate-500">E2B API Key (untuk .sandboxdeploy)</label>
+            <input className="input" type="password" value={cfg.e2bApiKey || ""} onChange={(e) => setCfg({ ...cfg, e2bApiKey: e.target.value })} placeholder="e2b_..." maxLength={200} />
+            <p className="mt-1 text-[10px] text-slate-500">Menu Photo/Video URL: isi link foto ATAU video di field Menu Photo di atas.</p>
             <p className="mt-1 text-[10px] text-slate-600">Foto ini akan dikirim sebagai gambar pada .menu dan .allmenu. Kosongkan untuk kembali ke menu teks.</p>
           </Field>
           <div className="rounded-lg bg-white/[0.03] px-3 py-2.5 text-[11px] text-slate-500">

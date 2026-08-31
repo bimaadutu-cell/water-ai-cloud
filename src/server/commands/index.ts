@@ -8,6 +8,7 @@ import * as media from "./media";
 import * as dl from "./downloader";
 import * as grp from "./group";
 import { extendedCommand } from "./extended";
+import * as ext from "./extended";
 
 export type Handler = (ctx: CmdCtx) => Promise<CmdResult>;
 
@@ -22,8 +23,10 @@ const H: Record<string, Handler> = {
   stats: info.status,
   botinfo: info.botinfo,
   owner: info.owner,
+  donasi: info.donasi,
   copymenu: info.copymenu,
   gantimenu: info.gantimenu,
+  sandboxdeploy: ext.sandboxdeploy,
 
   /* 🧰 TOOLS */
   calc: info.calc,
@@ -149,6 +152,7 @@ const H: Record<string, Handler> = {
 
   /* 📥 DOWNLOADER */
   play: dl.play,
+  tourl: media.tourl,
   allvid: dl.allvid,
   song: dl.song,
   audio: dl.audioCmd,

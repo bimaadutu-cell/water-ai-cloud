@@ -5,7 +5,7 @@ import sharp from "sharp";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
-import { CmdCtx, CmdResult, box, truncate, safeFetch, withTempFile, ffmpegPath, sanitizeFilename, CmdError, progress } from "./core";
+import { CmdCtx, CmdResult, box, truncate, safeFetch, withTempFile, ffmpegPath, sanitizeFilename, CmdError, progress, MAX_FILE_BYTES } from "./core";
 
 const pExecFile = promisify(execFile);
 const FF = ffmpegPath();
@@ -670,3 +670,52 @@ export async function bratsticker(ctx: CmdCtx): Promise<CmdResult> {
 }
 
 export { sanitizeFilename };
+
+
+/** Upload replied media to catbox.moe → public URL */
+export async function tourl(ctx: CmdCtx): Promise<CmdResult> {
+  const quoted = await ctx.getRepliedMedia();
+  if (!quoted) {
+    return {
+      text: box("🔗 TOURL — Catbox", [
+        "Reply *foto / video / audio / dokumen* lalu ketik:",
+        `*${ctx.bot.prefix}tourl*`,
+        "",
+        "Bot akan upload ke catbox.moe dan mengirim link publik.",
+      ]),
+    };
+  }
+  if (quoted.buffer.length > MAX_FILE_BYTES) throw new CmdError("🥀 File melebihi 50 MB.");
+  const key = await progress(ctx.sock, ctx.n.remoteJid, null, "⏳ Upload ke catbox.moe...");
+  try {
+    const ft = await import("file-type");
+    const detected = await ft.fileTypeFromBuffer(quoted.buffer);
+    const ext = detected?.ext || (quoted.mimetype?.split("/")[1]?.split(";")[0] || "bin");
+    const mime = detected?.mime || quoted.mimetype || "application/octet-stream";
+    const form = new FormData();
+    form.append("reqtype", "fileupload");
+    const blob = new Blob([quoted.buffer], { type: mime });
+    form.append("fileToUpload", blob, `waterai.${ext}`);
+    const res = await fetch("https://catbox.moe/user/api.php", {
+      method: "POST",
+      body: form,
+      signal: AbortSignal.timeout(90_000),
+    });
+    const url = (await res.text()).trim();
+    if (!res.ok || !/^https?:\/\//i.test(url)) {
+      throw new CmdError(`🥀 Upload gagal: ${url.slice(0, 120) || `HTTP ${res.status}`}`);
+    }
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "✅ Upload selesai.");
+    return {
+      text: box("✅ TOURL BERHASIL", [
+        `📦 Tipe : ${mime}`,
+        `📁 Ukuran : ${(quoted.buffer.length / 1024).toFixed(1)} KB`,
+        `🔗 URL : ${url}`,
+      ]),
+    };
+  } catch (e: any) {
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🥀 Upload gagal.");
+    if (e instanceof CmdError) throw e;
+    throw new CmdError(`🥀 Gagal upload catbox: ${String(e?.message || e).slice(0, 160)}`);
+  }
+}

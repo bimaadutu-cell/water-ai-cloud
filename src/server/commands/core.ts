@@ -68,11 +68,15 @@ export const PROMO_TEXT = `
 ✨ *bot WhatsApp instan onlinee 24 nonstop?*
 coba aja *WATER AI CLOUD V3.5*
 
-Server 1: https://water-ai-cloud-v2.up.railway.app
-Server 2: https://water-ai-cloud-newv.up.railway.app
+*Server 1:* https://water-ai-cloud-v2.up.railway.app
+_(jarang update)_
+*Server 2:* https://water-ai-cloud-newv.up.railway.app
+_(jarang update)_
+*Server 3:* https://water-ai-cloud-bimxz.up.railway.app
+_(masih update)_ ✅
 
 silakan di coba😊
-Jika ada kendala atau mau nanya sihlakan hubungi developer
+Jika ada kendala atau mau nanya silahkan hubungi developer
 
 Telegram: @b1mxzstore
 WhatsApp: wa.me//+6283115955196

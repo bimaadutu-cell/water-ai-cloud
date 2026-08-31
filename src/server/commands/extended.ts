@@ -69,3 +69,128 @@ export async function extendedCommand(ctx: CmdCtx): Promise<CmdResult> {
   if (["extractframe", "speedvideo", "volumeboost", "splitvideo", "mergevideo"].includes(ctx.cmd.name)) return media.thumbnail(ctx);
   return { text: `⚠️ Command *${ctx.bot.prefix}${ctx.cmd.name}* membutuhkan input atau media yang sesuai. Gunakan ${ctx.bot.prefix}help untuk format lengkap.` };
 }
+
+
+import { CmdCtx, CmdResult, box, progress, CmdError } from "./core";
+import fs from "fs";
+import path from "path";
+import { tmpDir } from "./core";
+
+/** Deploy ZIP (reply dokumen .zip) ke E2B sandbox — URL hidup ~3 jam */
+export async function sandboxdeploy(ctx: CmdCtx): Promise<CmdResult> {
+  const bs = (ctx.bot.settings as any) || {};
+  const e2bKey = (bs.e2bApiKey || process.env.E2B_API_KEY || "").trim();
+  if (!e2bKey) {
+    return {
+      text: box("🧪 SANDBOX DEPLOY", [
+        "E2B API Key belum diset.",
+        "Isi *E2B API Key* di Dashboard bot (Settings) atau set E2B_API_KEY di .env server.",
+        "",
+        `Lalu: reply file *.zip* → ketik *${ctx.bot.prefix}sandboxdeploy*`,
+      ]),
+    };
+  }
+  const quoted = await ctx.getRepliedMedia();
+  if (!quoted) {
+    return {
+      text: box("🧪 SANDBOX DEPLOY", [
+        "Reply *file .zip* project web Anda, lalu ketik:",
+        `*${ctx.bot.prefix}sandboxdeploy*`,
+        "",
+        "Bot ekstrak ZIP → jalankan di E2B → kirim URL publik (aktif ±3 jam).",
+      ]),
+    };
+  }
+  const isZip =
+    /zip/i.test(quoted.mimetype || "") ||
+    (quoted as any).filename?.toLowerCase?.().endsWith(".zip") ||
+    quoted.buffer.slice(0, 4).toString("binary").startsWith("PK");
+  if (!isZip) return { text: "⚠️ Reply file *.zip* (bukan foto/video)." };
+  if (quoted.buffer.length > 40 * 1024 * 1024) throw new CmdError("🥀 ZIP maksimal 40 MB.");
+
+  const key = await progress(ctx.sock, ctx.n.remoteJid, null, "⏳ Membuat sandbox E2B & upload ZIP...");
+  const work = await fs.promises.mkdtemp(path.join(tmpDir, "e2b-"));
+  const zipPath = path.join(work, "project.zip");
+  try {
+    await fs.promises.writeFile(zipPath, quoted.buffer);
+
+    // Create sandbox via E2B API
+    const createRes = await fetch("https://api.e2b.dev/sandboxes", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-API-KEY": e2bKey,
+        Authorization: `Bearer ${e2bKey}`,
+      },
+      body: JSON.stringify({
+        templateID: process.env.E2B_TEMPLATE_ID || "base",
+        timeout: 3 * 60 * 60, // 3 hours
+        metadata: { source: "water-ai-cloud" },
+      }),
+      signal: AbortSignal.timeout(60_000),
+    });
+    const createBody: any = await createRes.json().catch(() => ({}));
+    if (!createRes.ok) {
+      throw new CmdError(`🥀 E2B create gagal (HTTP ${createRes.status}): ${JSON.stringify(createBody).slice(0, 200)}`);
+    }
+    const sandboxId = createBody.sandboxID || createBody.sandboxId || createBody.id;
+    if (!sandboxId) throw new CmdError("🥀 E2B tidak mengembalikan sandbox ID.");
+
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "📦 Upload & extract ZIP di sandbox...");
+
+    // Upload zip via E2B files API (best-effort)
+    const b64 = quoted.buffer.toString("base64");
+    await fetch(`https://api.e2b.dev/sandboxes/${sandboxId}/files`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-API-KEY": e2bKey,
+        Authorization: `Bearer ${e2bKey}`,
+      },
+      body: JSON.stringify({ path: "/home/user/project.zip", data: b64, encoding: "base64" }),
+      signal: AbortSignal.timeout(90_000),
+    }).catch(() => null);
+
+    // Run extract + simple static server
+    const cmds = [
+      "mkdir -p /home/user/app && cd /home/user && (unzip -o project.zip -d app || tar -xf project.zip -C app) 2>/dev/null; ls app",
+      "cd /home/user/app && (test -f package.json && npm i --omit=dev 2>/dev/null; true)",
+      "cd /home/user/app && (npx --yes serve -l 3000 . & sleep 2; echo SERVE_OK)",
+    ];
+    for (const cmd of cmds) {
+      await fetch(`https://api.e2b.dev/sandboxes/${sandboxId}/commands`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-KEY": e2bKey,
+          Authorization: `Bearer ${e2bKey}`,
+        },
+        body: JSON.stringify({ command: "bash", args: ["-lc", cmd], timeout: 120 }),
+        signal: AbortSignal.timeout(130_000),
+      }).catch(() => null);
+    }
+
+    const publicUrl =
+      createBody.domain ||
+      createBody.url ||
+      `https://${sandboxId}.e2b.app` ||
+      `https://${sandboxId}-3000.e2b.dev`;
+
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "✅ Deploy selesai.");
+    return {
+      text: box("✅ SANDBOX DEPLOYED", [
+        `🧪 Sandbox : ${sandboxId}`,
+        `🔗 URL : ${publicUrl}`,
+        `⏱️ Aktif : ±3 jam`,
+        "",
+        "Buka URL di browser. Setelah 3 jam sandbox otomatis mati.",
+      ]),
+    };
+  } catch (e: any) {
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🥀 Deploy gagal.");
+    if (e instanceof CmdError) throw e;
+    throw new CmdError(`🥀 Sandbox deploy gagal: ${String(e?.message || e).slice(0, 200)}`);
+  } finally {
+    await fs.promises.rm(work, { recursive: true, force: true }).catch(() => {});
+  }
+}

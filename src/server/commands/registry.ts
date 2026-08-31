@@ -108,6 +108,7 @@ export const REGISTRY: RegistryCommand[] = [
   c("imginfo", "image", "Info gambar: ukuran, format, DPI"),
 
   /* 🎬 MEDIA — real conversion with ffmpeg */
+  c("tourl", "media", "Upload media ke catbox → URL: reply media lalu .tourl"),
   c("tomp3", "media", "Video/audio → MP3 (reply media / URL)"),
   c("toaudio", "media", "Video → audio (reply media / URL)"),
   c("tovoice", "media", "Video/audio → voice note (PTT)"),
@@ -228,6 +229,7 @@ export const REGISTRY: RegistryCommand[] = [
   c("stats", "information", "Statistik bot (alias status)"),
   c("botinfo", "information", "Detail info bot"),
   c("owner", "information", "Nomor owner bot"),
+  c("donasi", "information", "Info donasi / support bot"),
   c("copymenu", "information", "Petunjuk salin menu"),
 
   /* 👑 OWNER */
@@ -245,6 +247,7 @@ export const REGISTRY: RegistryCommand[] = [
   c("clearcache", "owner", "Bersihkan state game & cache", "owner"),
   c("plugin", "owner", "Modul & jumlah command aktif", "owner"),
   c("maintenance", "owner", "Mode maintenance bot: .maintenance on|off", "owner"),
+  c("sandboxdeploy", "owner", "Deploy ZIP ke E2B sandbox (reply .zip), aktif ±3 jam", "owner"),
   c("gantimenu", "owner", "Ganti style menu 1-5: .gantimenu <1-5>", "owner"),
   c("logs", "owner", "Log aktivitas bot terbaru", "owner"),
 

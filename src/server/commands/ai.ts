@@ -7,14 +7,28 @@ async function aiChat(
   user: string,
   opts: { temperature?: number; maxTokens?: number; imageBase64?: string; imageMime?: string; botSettings?: any } = {}
 ): Promise<string> {
-  // Priority: bot settings (dashboard) > env
+  // Priority: bot settings (dashboard) > env — support Gemini (AIza), OpenAI (sk-), Groq/custom (gsk_/AQ/...)
   const bs = opts.botSettings || {};
   const key = (bs.geminiApiKey || bs.aiApiKey || process.env.GEMINI_API_KEY || process.env.AI_API_KEY || "").trim();
   if (!key)
-    return "⚠️ AI belum dikonfigurasi. Set GEMINI_API_KEY di .env server ATAU isi API Key AI di dashboard bot (Settings) agar lebih instan.";
-  const usingGemini = !!(bs.geminiApiKey || process.env.GEMINI_API_KEY) || /generativelanguage|gemini/i.test(String(bs.aiBaseUrl || process.env.GEMINI_API_BASE || process.env.AI_BASE_URL || ""));
-  const base = (bs.aiBaseUrl || process.env.GEMINI_API_BASE || process.env.AI_BASE_URL || (usingGemini ? "https://generativelanguage.googleapis.com/v1beta/openai" : "https://api.openai.com/v1")).replace(/\/$/, "");
-  const model = bs.aiModel || process.env.GEMINI_MODEL || process.env.AI_MODEL || "gemini-2.5-flash-lite";
+    return "⚠️ AI belum dikonfigurasi. Isi *API Key AI* di Dashboard bot ATAU set GEMINI_API_KEY / AI_API_KEY di .env server.";
+
+  const keyLower = key.toLowerCase();
+  const isGeminiKey = key.startsWith("AIza") || keyLower.includes("gemini");
+  const isGroq = key.startsWith("gsk_") || keyLower.startsWith("gsk");
+  const configuredBase = (bs.aiBaseUrl || process.env.AI_BASE_URL || process.env.GEMINI_API_BASE || "").trim().replace(/\/$/, "");
+
+  let base = configuredBase;
+  if (!base) {
+    if (isGeminiKey) base = "https://generativelanguage.googleapis.com/v1beta/openai";
+    else if (isGroq) base = "https://api.groq.com/openai/v1";
+    else base = "https://api.openai.com/v1"; // OpenAI-compatible (termasuk key AQ dari proxy)
+  }
+
+  const model =
+    (bs.aiModel || process.env.AI_MODEL || process.env.GEMINI_MODEL || "").trim() ||
+    (isGeminiKey ? "gemini-2.5-flash-lite" : isGroq ? "llama-3.3-70b-versatile" : "gpt-4o-mini");
+
   const messages: any[] = [{ role: "system", content: system }];
   if (opts.imageBase64) {
     messages.push({
@@ -27,6 +41,7 @@ async function aiChat(
   } else {
     messages.push({ role: "user", content: user });
   }
+
   const res = await fetch(`${base}/chat/completions`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
@@ -36,11 +51,19 @@ async function aiChat(
       max_tokens: opts.maxTokens ?? Number(process.env.GEMINI_MAX_OUTPUT_TOKENS || 8192),
       messages,
     }),
-    signal: AbortSignal.timeout(60000),
+    signal: AbortSignal.timeout(Number(process.env.GEMINI_TIMEOUT_MS || 60000)),
   });
-  if (!res.ok) return `❌ Gagal mengakses service AI (HTTP ${res.status}).`;
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => "");
+    const hint = res.status === 401 || res.status === 403
+      ? " Key ditolak — cek API key di dashboard & AI Base URL (jika pakai proxy)."
+      : res.status === 404
+        ? " Endpoint/model tidak ditemukan — set AI Base URL + AI Model di dashboard."
+        : "";
+    return `❌ Gagal mengakses service AI (HTTP ${res.status}).${hint}${errBody ? "\n" + errBody.slice(0, 180) : ""}`;
+  }
   const j: any = await res.json();
-  return j?.choices?.[0]?.message?.content || "AI tidak memberikan jawaban.";
+  return j?.choices?.[0]?.message?.content || j?.candidates?.[0]?.content?.parts?.[0]?.text || "AI tidak memberikan jawaban.";
 }
 
 const WA_SYSTEM =

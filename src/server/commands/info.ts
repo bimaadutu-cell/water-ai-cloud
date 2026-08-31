@@ -136,23 +136,31 @@ async function renderMenu(ctx: CmdCtx, full: boolean): Promise<CmdResult> {
   const owners = await db.select({ phone: botOwners.phone }).from(botOwners).where(eq(botOwners.botId, ctx.bot.id));
   const name = (ctx.raw?.pushName as string) || "user";
   const text = buildMenu(ctx.bot, name, rows, [ctx.bot.ownerNumber ?? "", ...owners.map((o) => o.phone)].filter(Boolean), full);
-  const menuPhotoUrl = String((ctx.bot.settings as any)?.menuPhotoUrl ?? "").trim();
+  const settings = (ctx.bot.settings as any) || {};
+  const menuMediaUrl = String(settings.menuPhotoUrl || settings.menuVideoUrl || "").trim();
   let buffer: Buffer | null = null;
-  if (/^https?:\/\//i.test(menuPhotoUrl)) {
-    try { buffer = await safeFetch(menuPhotoUrl, 8 * 1024 * 1024); } catch { buffer = null; }
+  if (/^https?:\/\//i.test(menuMediaUrl)) {
+    try { buffer = await safeFetch(menuMediaUrl, 15 * 1024 * 1024); } catch { buffer = null; }
   }
   if (!buffer) {
     try { buffer = await fs.promises.readFile(path.join(process.cwd(), "public", "menu-water-ai-cloud.png")); } catch { buffer = null; }
   }
-  if (!buffer) return { text: `${text}\\n\\n🥀 Foto menu tidak tersedia; menu teks tetap ditampilkan.` };
+  if (!buffer) return { text: `${text}\n\n🥀 Media menu tidak tersedia; menu teks tetap ditampilkan.` };
   try {
     const ft = await import("file-type");
     const detected = await ft.fileTypeFromBuffer(buffer);
-    if (!detected?.mime.startsWith("image/")) throw new Error("Aset bukan gambar");
-    return { media: { kind: "image", buffer, mimetype: detected.mime, caption: text } };
+    const mime = detected?.mime || "";
+    if (mime.startsWith("video/")) {
+      return { media: { kind: "video", buffer, mimetype: mime, caption: text } };
+    }
+    if (mime.startsWith("image/")) {
+      return { media: { kind: "image", buffer, mimetype: mime, caption: text } };
+    }
+    throw new Error("bukan image/video");
   } catch {
-    return { text: `${text}\\n\\n🥀 Foto menu tidak valid; menu teks tetap ditampilkan.` };
+    return { text: `${text}\n\n🥀 Media menu tidak valid; menu teks tetap ditampilkan.` };
   }
+
 }
 
 export async function menu(ctx: CmdCtx): Promise<CmdResult> {
@@ -163,14 +171,13 @@ export async function menu(ctx: CmdCtx): Promise<CmdResult> {
   if (style === 1) return result;
   // Style 2-5: tombol instan (max 3 untuk kompatibilitas WA)
   const buttons = [
-    { id: `${p}allmenu`, text: "📋 ALLMENU" },
-    { id: `${p}help`, text: "❓ HELP" },
-    { id: `${p}status`, text: "📡 STATUS" },
+    { id: `${p}allmenu`, text: "Allmenu" },
+    { id: `${p}owner`, text: "Owner" },
+    { id: `${p}donasi`, text: "Donasi" },
   ];
-  // Pastikan text ada agar tombol tetap terkirim meski ada foto menu
   return {
     ...result,
-    text: result.text || "Pilih tombol di bawah untuk navigasi cepat 👇",
+    text: result.text || "Pilih tombol di bawah 👇",
     buttons,
   };
 }
@@ -746,3 +753,18 @@ export async function logsCmd(ctx: CmdCtx): Promise<CmdResult> {
 }
 
 export { isNull, gte };
+
+
+export async function donasi(ctx: CmdCtx): Promise<CmdResult> {
+  return {
+    text: box("💎 DONASI", [
+      "Support WATER AI CLOUD biar makin kenceng 🚀",
+      "",
+      "Hubungi owner untuk info donasi:",
+      "Telegram: @b1mxzstore",
+      "WhatsApp: wa.me/+6283115955196",
+      "",
+      "Makasih banyak! 🙏",
+    ]),
+  };
+}
