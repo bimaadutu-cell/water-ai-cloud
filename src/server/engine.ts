@@ -9,7 +9,7 @@ import {
   DisconnectReason,
   Browsers,
   downloadMediaMessage,
-} from "@whiskeysockets/baileys";
+} from "@sairidev/baileys-new";
 import { db } from "@/db";
 import {
   bots,
@@ -1078,38 +1078,92 @@ async function sendInteractive(
 ) {
   const limited = buttons.slice(0, 3);
   const footer = "WATER AI CLOUD V3.5";
-  const btnPayload = limited.map((button) => ({
-    buttonId: button.id,
-    buttonText: { displayText: button.text.slice(0, 25) },
+  // Format yang didukung @sairidev/baileys-new / fork interactive
+  const simpleButtons = limited.map((b) => ({
+    text: b.text.slice(0, 25),
+    id: b.id,
+  }));
+  const legacyButtons = limited.map((b) => ({
+    buttonId: b.id,
+    buttonText: { displayText: b.text.slice(0, 25) },
     type: 1 as const,
   }));
+  const interactiveButtons = limited.map((b) => ({
+    name: "quick_reply",
+    buttonParamsJson: JSON.stringify({
+      display_text: b.text.slice(0, 25),
+      id: b.id,
+    }),
+  }));
 
-  // 1) Image/video + native buttons (satu pesan, seperti bot contoh)
+  // 1) Media + buttons (format fork modern: buttons: [{text,id}])
   if (media?.buffer && (media.kind === "image" || media.kind === "video")) {
-    try {
-      const base: any =
-        media.kind === "video"
-          ? { video: media.buffer, mimetype: media.mimetype || "video/mp4", caption: media.caption || text, footer, buttons: btnPayload, headerType: 4 }
-          : { image: media.buffer, caption: media.caption || text, footer, buttons: btnPayload, headerType: 4 };
-      await rb.sock.sendMessage(to, base);
-      await recordOut(rb, to, media.kind || "image", media.caption || text);
-      return;
-    } catch { /* next */ }
-    try {
-      // templateButtons + media
-      const base: any =
-        media.kind === "video"
-          ? { video: media.buffer, caption: media.caption || text, footer, templateButtons: limited.map((b, i) => ({ index: i + 1, quickReplyButton: { displayText: b.text.slice(0, 25), id: b.id } })) }
-          : { image: media.buffer, caption: media.caption || text, footer, templateButtons: limited.map((b, i) => ({ index: i + 1, quickReplyButton: { displayText: b.text.slice(0, 25), id: b.id } })) };
-      await rb.sock.sendMessage(to, base);
-      await recordOut(rb, to, media.kind || "image", media.caption || text);
-      return;
-    } catch { /* next */ }
+    const mediaKey = media.kind === "video" ? "video" : "image";
+    const attempts: any[] = [
+      {
+        [mediaKey]: media.buffer,
+        mimetype: media.mimetype,
+        caption: media.caption || text,
+        footer,
+        buttons: simpleButtons,
+      },
+      {
+        [mediaKey]: media.buffer,
+        mimetype: media.mimetype,
+        caption: media.caption || text,
+        footer,
+        buttons: legacyButtons,
+        headerType: media.kind === "video" ? 4 : 4,
+      },
+      {
+        [mediaKey]: media.buffer,
+        mimetype: media.mimetype,
+        caption: media.caption || text,
+        footer,
+        interactiveButtons,
+        hasMediaAttachment: true,
+      },
+    ];
+    for (const payload of attempts) {
+      try {
+        await rb.sock.sendMessage(to, payload);
+        await recordOut(rb, to, media.kind || "image", media.caption || text);
+        return;
+      } catch {
+        /* next format */
+      }
+    }
   }
 
-  // 2) List message (paling stabil di WA modern)
-  try {
-    await rb.sock.sendMessage(to, {
+  // 2) Text + simple buttons (format foto: Menu Utama / Selengkapnya)
+  const textAttempts: any[] = [
+    { text: text || "Pilih menu", footer, buttons: simpleButtons },
+    {
+      text: text || "Pilih menu",
+      footer,
+      title: "💧 WATER AI CLOUD",
+      buttons: simpleButtons,
+    },
+    {
+      text: text || "Pilih menu",
+      footer,
+      interactiveButtons,
+    },
+    {
+      text: text || "Pilih tombol",
+      footer,
+      buttons: legacyButtons,
+      headerType: 1,
+    },
+    {
+      text: text || "Pilih tombol",
+      footer,
+      templateButtons: limited.map((b, i) => ({
+        index: i + 1,
+        quickReplyButton: { displayText: b.text.slice(0, 25), id: b.id },
+      })),
+    },
+    {
       text: text || "Pilih menu",
       footer,
       title: "💧 WATER AI CLOUD",
@@ -1124,54 +1178,28 @@ async function sendInteractive(
           })),
         },
       ],
-    } as any);
-    await recordOut(rb, to, "text", text);
-    return;
-  } catch { /* next */ }
+    },
+  ];
+  for (const payload of textAttempts) {
+    try {
+      await rb.sock.sendMessage(to, payload);
+      await recordOut(rb, to, "text", text);
+      return;
+    } catch {
+      /* next */
+    }
+  }
 
-  // 3) Legacy buttons
-  try {
-    await rb.sock.sendMessage(to, {
-      text: text || "Pilih tombol",
-      footer,
-      buttons: btnPayload,
-      headerType: 1,
-    });
-    await recordOut(rb, to, "text", text);
-    return;
-  } catch { /* next */ }
-
-  // 4) templateButtons text-only
-  try {
-    await rb.sock.sendMessage(to, {
-      text: text || "Pilih tombol",
-      footer,
-      templateButtons: limited.map((b, i) => ({
-        index: i + 1,
-        quickReplyButton: { displayText: b.text.slice(0, 25), id: b.id },
-      })),
-    } as any);
-    await recordOut(rb, to, "text", text);
-    return;
-  } catch { /* next */ }
-
-  // 5) interactiveButtons / nativeFlow quick_reply
-  try {
-    await rb.sock.sendMessage(to, {
-      text: text || "Pilih tombol",
-      footer,
-      interactiveButtons: limited.map((b) => ({
-        name: "quick_reply",
-        buttonParamsJson: JSON.stringify({ display_text: b.text, id: b.id }),
-      })),
-    } as any);
-    await recordOut(rb, to, "text", text);
-    return;
-  } catch { /* next */ }
-
-  // 6) Fallback teks berformat tombol (tetap bisa diketik)
+  // 3) Fallback teks
   const hints = limited.map((b, i) => `${i + 1}. *${b.text}* → ketik *${b.id}*`).join("\n");
-  await sendInternal(rb, to, `${text}\n\n┌─「 *TOMBOL CEPAT* 」\n${hints.split("\n").map((l) => "│ " + l).join("\n")}\n└──────────────`);
+  await sendInternal(
+    rb,
+    to,
+    `${text}\n\n┌─「 *TOMBOL CEPAT* 」\n${hints
+      .split("\n")
+      .map((l) => "│ " + l)
+      .join("\n")}\n└──────────────`
+  );
 }
 
 async function sendInternal(rb: RunningBot, to: string, text: string) {
