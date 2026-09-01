@@ -142,7 +142,11 @@ export async function sandboxdeploy(ctx: CmdCtx): Promise<CmdResult> {
     if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "📦 Upload ZIP ke sandbox...");
 
     // Write ZIP into sandbox filesystem
-    await sandbox.files.write("/home/user/project.zip", quoted.buffer);
+    // E2B files.write types: string | ArrayBuffer | Blob | ReadableStream
+    // Node Buffer tidak assignable ke ArrayBuffer di TS strict — copy ke ArrayBuffer murni
+    const zipAb = new ArrayBuffer(quoted.buffer.byteLength);
+    new Uint8Array(zipAb).set(quoted.buffer);
+    await sandbox.files.write("/home/user/project.zip", zipAb);
 
     if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "📂 Extract project...");
 
@@ -208,7 +212,7 @@ export async function sandboxdeploy(ctx: CmdCtx): Promise<CmdResult> {
     ].join("\n");
 
     // Run start script once (it backgrounds the server with nohup)
-    const startOut = await sandbox.commands.run(startScript, {
+    await sandbox.commands.run(startScript, {
       cwd: "/home/user/app",
       timeoutMs: 60_000,
     });
@@ -218,7 +222,7 @@ export async function sandboxdeploy(ctx: CmdCtx): Promise<CmdResult> {
     try {
       await sandbox.commands.run(
         "python3 -m http.server 3000 --bind 0.0.0.0 --directory /home/user/app",
-        { background: true, cwd: "/home/user/app" }
+        { background: true, cwd: "/home/user/app" } as any
       );
     } catch {
       /* may already be listening */
@@ -232,7 +236,7 @@ export async function sandboxdeploy(ctx: CmdCtx): Promise<CmdResult> {
         "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/ || echo FAIL",
         { timeoutMs: 15_000 }
       );
-      const code = String(probe.stdout || "").trim();
+      const code = String((probe as any).stdout || "").trim();
       portOk = /^(200|301|302|304|403|404)/.test(code);
     } catch {
       portOk = false;
@@ -248,7 +252,7 @@ export async function sandboxdeploy(ctx: CmdCtx): Promise<CmdResult> {
       } catch { /* ignore */ }
       await sandbox.commands.run(
         "python3 -m http.server 3000 --bind 0.0.0.0 --directory /home/user/app",
-        { background: true, cwd: "/home/user/app" }
+        { background: true, cwd: "/home/user/app" } as any
       );
       await new Promise((r) => setTimeout(r, 2000));
     }
@@ -269,8 +273,8 @@ export async function sandboxdeploy(ctx: CmdCtx): Promise<CmdResult> {
         "",
         "Buka URL di browser. Sandbox otomatis mati setelah timeout.",
         "File project ada di /home/user/app di dalam sandbox.",
-        extractResult?.stdout
-          ? `Extract: ${String(extractResult.stdout).split("\\n").slice(0, 3).join(" | ").slice(0, 120)}`
+        (extractResult as any)?.stdout
+          ? `Extract: ${String((extractResult as any).stdout).split("\n").slice(0, 3).join(" | ").slice(0, 120)}`
           : "",
       ]),
     };
