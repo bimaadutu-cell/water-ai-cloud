@@ -981,14 +981,20 @@ export async function playV35(ctx: CmdCtx): Promise<CmdResult> {
   if (info.thumbnailUrl) {
     try { thumbBuf = await safeFetch(info.thumbnailUrl, 2 * 1024 * 1024); } catch { /* ignore */ }
   }
-  const previewCaption = box("🎵 DITEMUKAN", [
-    `Title : ${info.title}`,
-    `Creator : ${info.uploader || "-"}`,
-    `Duration : ${durationText(info.durationSec)}`,
-    info.webpageUrl ? `Link : ${info.webpageUrl}` : "",
-    ``,
-    `⏳ ntar nih lagi di download...`,
-  ]);
+  const previewCaption = [
+    "╭─━━━━━━━━━━━━━━━━━━━─╮",
+    "│  🎧  *TRACK FOUND*",
+    "╰─━━━━━━━━━━━━━━━━━━━─╯",
+    "",
+    `🎵 *${info.title}*`,
+    `🎤 ${info.uploader || "Unknown Artist"}`,
+    `⏱️ ${durationText(info.durationSec)}`,
+    info.webpageUrl ? `🔗 ${info.webpageUrl}` : "",
+    "",
+    "━━━━━━━━━━━━━━━━━━━━",
+    "⬇️  _Sedang mengunduh audio..._",
+    "⏳  _Tunggu sebentar ya_",
+  ].filter(Boolean).join("\n");
   if (thumbBuf) {
     try {
       await ctx.sock.sendMessage(ctx.n.remoteJid, {

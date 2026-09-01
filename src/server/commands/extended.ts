@@ -97,7 +97,7 @@ export async function sandboxdeploy(ctx: CmdCtx): Promise<CmdResult> {
         "Reply *file .zip* project web Anda, lalu ketik:",
         `*${ctx.bot.prefix}sandboxdeploy*`,
         "",
-        "Bot akan: upload ZIP → extract → install deps (bila ada) → jalankan HTTP server di port 3000 → kirim URL publik.",
+        "Bot: upload → extract → serve port 3000 → kirim URL publik.",
       ]),
     };
   }
@@ -129,153 +129,150 @@ export async function sandboxdeploy(ctx: CmdCtx): Promise<CmdResult> {
       3 * 60 * 60
     );
 
-    // Official E2B SDK — handles envd process + files correctly
     const { Sandbox } = await import("e2b");
     const sandbox = await Sandbox.create(templateID, {
       apiKey: e2bKey,
       timeoutMs: timeoutSec * 1000,
       metadata: { source: "water-ai-cloud", botId: String(ctx.bot.id || "") },
     });
-
     const sandboxId = sandbox.sandboxId;
 
-    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "📦 Upload ZIP ke sandbox...");
+    // Helper: run shell, NEVER throw on non-zero exit (E2B throws "exit status N")
+    async function sh(cmd: string, timeoutMs = 120_000, background = false): Promise<string> {
+      const wrapped = `bash -lc ${JSON.stringify(cmd + " ; exit 0")}`;
+      try {
+        const opts: any = { timeoutMs };
+        if (background) opts.background = true;
+        const res: any = await sandbox.commands.run(wrapped, opts);
+        return String(res?.stdout || res?.stderr || "");
+      } catch (e: any) {
+        // CommandExitError still returns useful stdout sometimes
+        const msg = String(e?.message || e || "");
+        const out = String(e?.result?.stdout || e?.stdout || "");
+        if (/exit status/i.test(msg)) return out || msg;
+        // For background start, some SDK versions return handle not error
+        if (background) return "bg";
+        return out || msg;
+      }
+    }
 
-    // Write ZIP into sandbox filesystem
-    // E2B files.write types: string | ArrayBuffer | Blob | ReadableStream
-    // Node Buffer tidak assignable ke ArrayBuffer di TS strict — copy ke ArrayBuffer murni
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "📦 Upload ZIP...");
+
     const zipAb = new ArrayBuffer(quoted.buffer.byteLength);
     new Uint8Array(zipAb).set(quoted.buffer);
     await sandbox.files.write("/home/user/project.zip", zipAb);
 
-    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "📂 Extract project...");
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "📂 Extract...");
 
-    // Extract; flatten single top-level folder if present
-    const extractResult = await sandbox.commands.run(
+    // Simple extract — no broken && chains with if/fi
+    const extractOut = await sh(
       [
         "mkdir -p /home/user/app",
         "cd /home/user",
-        "(unzip -o project.zip -d app || tar -xf project.zip -C app || true)",
-        // If zip contains a single root folder, move its contents up
-        'ENTRIES=$(find app -mindepth 1 -maxdepth 1 | wc -l)',
-        'if [ "$ENTRIES" -eq 1 ]; then',
-        '  SUB=$(find app -mindepth 1 -maxdepth 1 -type d | head -1)',
-        '  if [ -n "$SUB" ]; then shopt -s dotglob; mv "$SUB"/* app/ 2>/dev/null; rmdir "$SUB" 2>/dev/null; fi',
+        "unzip -o project.zip -d app 2>/dev/null || python3 -c \"import zipfile; zipfile.ZipFile('project.zip').extractall('app')\" 2>/dev/null || true",
+        // flatten single root dir
+        "cd /home/user/app",
+        "count=$(find . -mindepth 1 -maxdepth 1 | wc -l)",
+        "if [ \"$count\" -eq 1 ]; then",
+        "  sub=$(find . -mindepth 1 -maxdepth 1 -type d | head -1)",
+        "  if [ -n \"$sub\" ]; then mv \"$sub\"/* . 2>/dev/null; mv \"$sub\"/.* . 2>/dev/null; rmdir \"$sub\" 2>/dev/null; fi",
         "fi",
-        "ls -la /home/user/app | head -25",
-      ].join(" && "),
-      { cwd: "/home/user", timeoutMs: 120_000 }
+        "ls -la /home/user/app | head -20",
+      ].join("\n"),
+      120_000
     );
 
-    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "📦 Install dependencies...");
-
-    // Install deps if package.json / requirements.txt exists
-    await sandbox.commands.run(
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "📦 Install deps (opsional)...");
+    await sh(
       [
         "cd /home/user/app",
-        "if [ -f package.json ]; then",
-        "  npm install --omit=dev --no-audit --no-fund 2>&1 | tail -8",
-        "elif [ -f requirements.txt ]; then",
-        "  pip3 install -r requirements.txt -q 2>&1 | tail -5",
-        "else",
-        "  echo NO_PACKAGE_MANAGER",
-        "fi",
+        "if [ -f package.json ]; then npm install --omit=dev --no-audit --no-fund 2>&1 | tail -5; fi",
+        "if [ -f requirements.txt ]; then pip3 install -r requirements.txt -q 2>&1 | tail -3; fi",
+        "echo INSTALL_DONE",
       ].join("\n"),
-      { cwd: "/home/user/app", timeoutMs: 300_000 }
-    ).catch(() => null);
+      300_000
+    );
 
-    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🚀 Start server di port 3000...");
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🚀 Start HTTP server :3000...");
 
-    // Choose start strategy and launch in BACKGROUND so the process keeps running
-    // python3 -m http.server is always available on E2B base template as reliable fallback
-    const startScript = [
-      "cd /home/user/app",
-      "rm -f /tmp/serve.log /tmp/serve.pid",
-      "if [ -f package.json ] && grep -q '\"start\"' package.json 2>/dev/null; then",
-      "  nohup env PORT=3000 HOST=0.0.0.0 npm start > /tmp/serve.log 2>&1 & echo $! > /tmp/serve.pid",
-      "elif [ -f package.json ] && grep -q '\"dev\"' package.json 2>/dev/null; then",
-      "  nohup env PORT=3000 HOST=0.0.0.0 npm run dev > /tmp/serve.log 2>&1 & echo $! > /tmp/serve.pid",
-      "elif [ -f index.html ] || [ -f public/index.html ] || [ -d dist ] || [ -d build ]; then",
-      "  DIR=.",
-      "  [ -d public ] && DIR=public",
-      "  [ -d dist ] && DIR=dist",
-      "  [ -d build ] && DIR=build",
-      "  nohup python3 -m http.server 3000 --bind 0.0.0.0 --directory \"$DIR\" > /tmp/serve.log 2>&1 & echo $! > /tmp/serve.pid",
-      "else",
-      "  nohup python3 -m http.server 3000 --bind 0.0.0.0 --directory /home/user/app > /tmp/serve.log 2>&1 & echo $! > /tmp/serve.pid",
-      "fi",
-      "sleep 2",
-      "echo PID=$(cat /tmp/serve.pid 2>/dev/null)",
-      "ss -tlnp 2>/dev/null | grep 3000 || netstat -tlnp 2>/dev/null | grep 3000 || true",
-      "curl -s -o /dev/null -w 'HTTP %{http_code}\\n' http://127.0.0.1:3000/ || true",
-      "head -20 /tmp/serve.log 2>/dev/null || true",
-    ].join("\n");
+    // Pick serve directory
+    await sh(
+      [
+        "cd /home/user/app",
+        "DIR=/home/user/app",
+        "[ -d /home/user/app/public ] && DIR=/home/user/app/public",
+        "[ -d /home/user/app/dist ] && DIR=/home/user/app/dist",
+        "[ -d /home/user/app/build ] && DIR=/home/user/app/build",
+        "echo \"$DIR\" > /tmp/serve_dir.txt",
+        "cat /tmp/serve_dir.txt",
+      ].join("\n"),
+      30_000
+    );
 
-    // Run start script once (it backgrounds the server with nohup)
-    await sandbox.commands.run(startScript, {
-      cwd: "/home/user/app",
-      timeoutMs: 60_000,
-    });
-
-    // Also explicitly start python http.server in background via SDK (belt + suspenders)
-    // in case the nohup path failed
+    // Kill any old server then start python http.server in BACKGROUND
+    await sh("pkill -f 'http.server 3000' 2>/dev/null || true", 15_000);
+    // Primary: python static server (always on E2B base)
+    await sh(
+      "DIR=$(cat /tmp/serve_dir.txt 2>/dev/null || echo /home/user/app); " +
+        "nohup python3 -m http.server 3000 --bind 0.0.0.0 --directory \"$DIR\" > /tmp/serve.log 2>&1 & " +
+        "echo $! > /tmp/serve.pid; sleep 1; echo STARTED",
+      30_000
+    );
+    // Also try SDK background API
     try {
       await sandbox.commands.run(
-        "python3 -m http.server 3000 --bind 0.0.0.0 --directory /home/user/app",
-        { background: true, cwd: "/home/user/app" } as any
+        "bash -lc 'DIR=$(cat /tmp/serve_dir.txt 2>/dev/null || echo /home/user/app); exec python3 -m http.server 3000 --bind 0.0.0.0 --directory \"$DIR\"'",
+        { background: true, timeoutMs: 0 } as any
       );
     } catch {
-      /* may already be listening */
+      /* ignore */
     }
 
-    // Wait a bit and probe port
-    await new Promise((r) => setTimeout(r, 2500));
-    let portOk = false;
-    try {
-      const probe = await sandbox.commands.run(
+    // Optional: if package.json has start script, try it too (may take longer)
+    await sh(
+      [
+        "cd /home/user/app",
+        "if [ -f package.json ] && grep -q '\"start\"' package.json; then",
+        "  nohup env PORT=3000 HOST=0.0.0.0 npm start > /tmp/npm-start.log 2>&1 &",
+        "fi",
+        "sleep 2",
         "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/ || echo FAIL",
-        { timeoutMs: 15_000 }
-      );
-      const code = String((probe as any).stdout || "").trim();
-      portOk = /^(200|301|302|304|403|404)/.test(code);
-    } catch {
-      portOk = false;
-    }
+      ].join("\n"),
+      60_000
+    );
 
-    // If still not up, force python static server in background
+    await new Promise((r) => setTimeout(r, 2000));
+    const probeOut = await sh(
+      "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/ || echo FAIL",
+      15_000
+    );
+    const portOk = /200|301|302|304|403|404/.test(probeOut);
+
     if (!portOk) {
-      if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🔁 Retry static server...");
-      try {
-        await sandbox.commands.run("pkill -f 'http.server 3000' 2>/dev/null || true", {
-          timeoutMs: 10_000,
-        });
-      } catch { /* ignore */ }
-      await sandbox.commands.run(
-        "python3 -m http.server 3000 --bind 0.0.0.0 --directory /home/user/app",
-        { background: true, cwd: "/home/user/app" } as any
+      if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🔁 Force static server...");
+      await sh(
+        "pkill -f 'http.server' 2>/dev/null || true; " +
+          "nohup python3 -m http.server 3000 --bind 0.0.0.0 --directory /home/user/app > /tmp/serve.log 2>&1 & sleep 2; " +
+          "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/ || true",
+        30_000
       );
-      await new Promise((r) => setTimeout(r, 2000));
     }
 
     const host = sandbox.getHost(3000);
     const publicUrl = `https://${host}`;
-
     if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "✅ Deploy selesai.");
 
-    // Note: do NOT kill the sandbox — leave it running so the URL stays live
     return {
       text: box("✅ SANDBOX DEPLOYED", [
         `🧪 Sandbox : ${sandboxId}`,
         `🔗 URL     : ${publicUrl}`,
         `⏱️ Aktif   : ±${Math.round(timeoutSec / 60)} menit`,
         `📦 Template: ${templateID}`,
-        portOk ? "🟢 Port 3000 : OK" : "🟡 Port 3000 : starting (tunggu 5–15 detik)",
+        portOk ? "🟢 Port 3000 : listening" : "🟡 Port 3000 : starting — refresh 5–15 detik",
         "",
-        "Buka URL di browser. Sandbox otomatis mati setelah timeout.",
-        "File project ada di /home/user/app di dalam sandbox.",
-        (extractResult as any)?.stdout
-          ? `Extract: ${String((extractResult as any).stdout).split("\n").slice(0, 3).join(" | ").slice(0, 120)}`
-          : "",
+        "Buka URL di browser (share ke orang lain juga bisa).",
+        "Sandbox mati otomatis setelah timeout.",
+        extractOut ? `📂 ${extractOut.split("\n").filter(Boolean).slice(-3).join(" · ").slice(0, 140)}` : "",
       ]),
     };
   } catch (e: any) {
@@ -284,7 +281,7 @@ export async function sandboxdeploy(ctx: CmdCtx): Promise<CmdResult> {
     const msg = String(e?.message || e).slice(0, 280);
     throw new CmdError(
       `🥀 Sandbox deploy gagal: ${msg}\n` +
-        "Cek E2B_API_KEY, kuota E2B, dan pastikan package `e2b` terinstall di server."
+        "Cek E2B_API_KEY / kuota E2B. Package `e2b` harus terinstall di server."
     );
   } finally {
     await fs.promises.rm(work, { recursive: true, force: true }).catch(() => {});

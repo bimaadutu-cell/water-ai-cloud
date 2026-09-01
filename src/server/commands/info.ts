@@ -167,14 +167,33 @@ export async function menu(ctx: CmdCtx): Promise<CmdResult> {
   const result = await renderMenu(ctx, false);
   const style = getMenuStyle(ctx.bot);
   const p = ctx.bot.prefix || "!";
-  // Style 1: no buttons (text only)
+  // Style 1: teks only
   if (style === 1) return result;
-  // Style 2-5: tombol instan (max 3 untuk kompatibilitas WA)
-  const buttons = [
-    { id: `${p}allmenu`, text: "Allmenu" },
-    { id: `${p}owner`, text: "Owner" },
-    { id: `${p}donasi`, text: "Donasi" },
-  ];
+  // Style 2-5: tombol interaktif WA (max 3)
+  // Style makin keren = tombol navigasi lebih lengkap
+  const buttonSets: Record<number, { id: string; text: string }[]> = {
+    2: [
+      { id: `${p}allmenu`, text: "📋 Menu Utama" },
+      { id: `${p}allmenu`, text: "✨ Selengkapnya" },
+      { id: `${p}owner`, text: "👑 Owner" },
+    ],
+    3: [
+      { id: `${p}allmenu`, text: "📋 Menu Utama" },
+      { id: `${p}help`, text: "❓ Bantuan" },
+      { id: `${p}owner`, text: "👑 Owner" },
+    ],
+    4: [
+      { id: `${p}allmenu`, text: "⚡ All Menu" },
+      { id: `${p}status`, text: "📊 Status" },
+      { id: `${p}owner`, text: "👑 Owner" },
+    ],
+    5: [
+      { id: `${p}allmenu`, text: "📋 Menu Utama" },
+      { id: `${p}allmenu`, text: "✨ Selengkapnya" },
+      { id: `${p}donasi`, text: "💎 Donasi" },
+    ],
+  };
+  const buttons = buttonSets[style] || buttonSets[2];
   return {
     ...result,
     text: result.text || "Pilih tombol di bawah 👇",
@@ -187,14 +206,32 @@ export async function allmenu(ctx: CmdCtx): Promise<CmdResult> {
   const style = getMenuStyle(ctx.bot);
   if (style === 1) return result;
   const p = ctx.bot.prefix || "!";
+  const buttonSets: Record<number, { id: string; text: string }[]> = {
+    2: [
+      { id: `${p}menu`, text: "🏠 Menu Utama" },
+      { id: `${p}help`, text: "✨ Selengkapnya" },
+      { id: `${p}owner`, text: "👑 Owner" },
+    ],
+    3: [
+      { id: `${p}menu`, text: "🏠 Menu Utama" },
+      { id: `${p}status`, text: "📊 Status" },
+      { id: `${p}owner`, text: "👑 Owner" },
+    ],
+    4: [
+      { id: `${p}menu`, text: "🏠 Menu" },
+      { id: `${p}help`, text: "❓ Help" },
+      { id: `${p}ping`, text: "🏓 Ping" },
+    ],
+    5: [
+      { id: `${p}menu`, text: "🏠 Menu Utama" },
+      { id: `${p}help`, text: "✨ Selengkapnya" },
+      { id: `${p}donasi`, text: "💎 Donasi" },
+    ],
+  };
   return {
     ...result,
     text: result.text || "Navigasi cepat 👇",
-    buttons: [
-      { id: `${p}menu`, text: "🏠 MENU" },
-      { id: `${p}help`, text: "❓ HELP" },
-      { id: `${p}owner`, text: "👑 OWNER" },
-    ],
+    buttons: buttonSets[style] || buttonSets[2],
   };
 }
 
@@ -206,11 +243,11 @@ export async function gantimenu(ctx: CmdCtx): Promise<CmdResult> {
       text: box("🎨 GANTI MENU (Owner)", [
         `Style saat ini: *${current}*`,
         ``,
-        `*1* — Default (tanpa tombol)`,
-        `*2* — Struktur keren + text menyala + tombol`,
-        `*3* — Elegan + tombol`,
-        `*4* — Neon keren + tombol`,
-        `*5* — Maksimal keren keren keren + tombol`,
+        `*1* — Default (teks polos, tanpa tombol)`,
+        `*2* — Clean + tombol *Menu Utama / Selengkapnya*`,
+        `*3* — Elegan + tombol navigasi`,
+        `*4* — Neon + tombol cepat`,
+        `*5* — Premium + tombol *Menu Utama / Selengkapnya / Donasi*`,
         ``,
         `Pakai: ${ctx.bot.prefix}gantimenu <1-5>`,
       ]),
