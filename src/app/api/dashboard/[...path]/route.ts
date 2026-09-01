@@ -700,8 +700,11 @@ async function updateBot(user: User, botId: string, body: any) {
   if (typeof body?.description === "string") patch.description = body.description.slice(0, 500);
   if (body?.settings && typeof body.settings === "object") {
     const nextSettings = { ...((current.settings ?? {}) as Record<string, unknown>) };
-    if (Object.prototype.hasOwnProperty.call(body.settings, "menuPhotoUrl")) {
-      const value = String(body.settings.menuPhotoUrl ?? "").trim();
+    const s = body.settings as Record<string, unknown>;
+
+    // menuPhotoUrl (optional URL)
+    if (Object.prototype.hasOwnProperty.call(s, "menuPhotoUrl")) {
+      const value = String(s.menuPhotoUrl ?? "").trim();
       if (value) {
         let parsed: URL;
         try { parsed = new URL(value); } catch { throw new ApiError("VALIDATION", 400, "URL foto menu tidak valid"); }
@@ -709,6 +712,48 @@ async function updateBot(user: User, botId: string, body: any) {
         nextSettings.menuPhotoUrl = parsed.toString().slice(0, 2000);
       } else delete nextSettings.menuPhotoUrl;
     }
+
+    // AI keys & model — dari Dashboard saja
+    if (Object.prototype.hasOwnProperty.call(s, "geminiApiKey")) {
+      const k = String(s.geminiApiKey ?? "").trim();
+      if (k) nextSettings.geminiApiKey = k.slice(0, 256);
+      else delete nextSettings.geminiApiKey;
+    }
+    if (Object.prototype.hasOwnProperty.call(s, "aiApiKey")) {
+      const k = String(s.aiApiKey ?? "").trim();
+      if (k) nextSettings.aiApiKey = k.slice(0, 256);
+      else delete nextSettings.aiApiKey;
+    }
+    if (Object.prototype.hasOwnProperty.call(s, "aiModel")) {
+      const m = String(s.aiModel ?? "").trim();
+      if (m) nextSettings.aiModel = m.slice(0, 64);
+      else delete nextSettings.aiModel;
+    }
+    if (Object.prototype.hasOwnProperty.call(s, "aiBaseUrl")) {
+      const u = String(s.aiBaseUrl ?? "").trim();
+      if (u) nextSettings.aiBaseUrl = u.slice(0, 500);
+      else delete nextSettings.aiBaseUrl;
+    }
+    if (Object.prototype.hasOwnProperty.call(s, "menuStyle")) {
+      const n = Number(s.menuStyle);
+      nextSettings.menuStyle = Number.isFinite(n) ? Math.min(5, Math.max(1, Math.floor(n))) : 1;
+    }
+    if (Object.prototype.hasOwnProperty.call(s, "e2bApiKey")) {
+      const k = String(s.e2bApiKey ?? "").trim();
+      if (k) nextSettings.e2bApiKey = k.slice(0, 256);
+      else delete nextSettings.e2bApiKey;
+    }
+    if (Object.prototype.hasOwnProperty.call(s, "e2bTemplateId")) {
+      const k = String(s.e2bTemplateId ?? "").trim();
+      if (k) nextSettings.e2bTemplateId = k.slice(0, 64);
+      else delete nextSettings.e2bTemplateId;
+    }
+
+    // Nested ai block (enabled/model/prompt) jika dikirim
+    if (s.ai && typeof s.ai === "object") {
+      nextSettings.ai = { ...((nextSettings.ai as object) || {}), ...(s.ai as object) };
+    }
+
     patch.settings = nextSettings;
   }
   if (!Object.keys(patch).length) throw new ApiError("VALIDATION", 400, "Tidak ada field yang diupdate");

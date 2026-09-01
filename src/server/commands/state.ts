@@ -1,6 +1,6 @@
 /* In-memory game/session state per (botId:chatJid), TTL 10 minutes. */
 export interface Game {
-  kind: "quiz" | "tebakkata" | "tebakgambar" | "flashcard";
+  kind: "quiz" | "tebakkata" | "tebakgambar" | "flashcard" | "chess2";
   data: any;
   startedAt: number;
 }

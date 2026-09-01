@@ -684,6 +684,152 @@ export async function flashcard(ctx: CmdCtx): Promise<CmdResult> {
 }
 
 /** Process a plain-text answer for pending games. Returns reply or null. */
+
+/* ============================== CHESS2 ============================== */
+const CHESS_PIECES: Record<string, string> = {
+  K: "♔", Q: "♕", R: "♖", B: "♗", N: "♘", P: "♙",
+  k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟",
+};
+
+function chessEmptyBoard(): (string | null)[][] {
+  const b: (string | null)[][] = Array.from({ length: 8 }, () => Array(8).fill(null));
+  const back = ["R", "N", "B", "Q", "K", "B", "N", "R"];
+  for (let i = 0; i < 8; i++) {
+    b[0][i] = back[i].toLowerCase();
+    b[1][i] = "p";
+    b[6][i] = "P";
+    b[7][i] = back[i];
+  }
+  return b;
+}
+
+function chessRender(board: (string | null)[][], turn: "w" | "b"): string {
+  const files = "  a  b  c  d  e  f  g  h";
+  const lines = [files];
+  for (let r = 0; r < 8; r++) {
+    let row = `${8 - r} `;
+    for (let c = 0; c < 8; c++) {
+      const p = board[r][c];
+      const dark = (r + c) % 2 === 1;
+      const cell = p ? CHESS_PIECES[p] || p : dark ? "·" : " ";
+      row += cell + " ";
+    }
+    lines.push(row + `${8 - r}`);
+  }
+  lines.push(files);
+  return (
+    `♟️ *CHESS2* — VS BOT · FUN MODE\n` +
+    `Giliran: *${turn === "w" ? "Kamu (Putih)" : "Bot (Hitam)"}*\n\n` +
+    "```\n" +
+    lines.join("\n") +
+    "\n```\n" +
+    `Gerak: \`.chess2 e2e4\` · Batal: \`.chess2 resign\` · Baru: \`.chess2 new\``
+  );
+}
+
+function parseSquare(s: string): { r: number; c: number } | null {
+  if (!/^[a-h][1-8]$/i.test(s)) return null;
+  const c = s.toLowerCase().charCodeAt(0) - 97;
+  const r = 8 - parseInt(s[1], 10);
+  return { r, c };
+}
+
+function isWhite(p: string | null) {
+  return !!p && p === p.toUpperCase();
+}
+
+function chessTryMove(
+  board: (string | null)[][],
+  from: string,
+  to: string,
+  turn: "w" | "b"
+): { ok: boolean; msg?: string } {
+  const a = parseSquare(from);
+  const b = parseSquare(to);
+  if (!a || !b) return { ok: false, msg: "Kotak tidak valid. Contoh: e2e4" };
+  const piece = board[a.r][a.c];
+  if (!piece) return { ok: false, msg: "Tidak ada bidak di " + from };
+  if (turn === "w" && !isWhite(piece)) return { ok: false, msg: "Giliran putih" };
+  if (turn === "b" && isWhite(piece)) return { ok: false, msg: "Giliran hitam" };
+  const target = board[b.r][b.c];
+  if (target && isWhite(target) === isWhite(piece)) return { ok: false, msg: "Tidak bisa makan bidak sendiri" };
+  // Gerakan longgar (fun mode) — validasi dasar loncat satu langkah / bebas untuk demo
+  board[b.r][b.c] = piece;
+  board[a.r][a.c] = null;
+  return { ok: true };
+}
+
+function chessBotMove(board: (string | null)[][]): void {
+  // Fun bot: pilih langkah hitam acak yang legal longgar
+  const moves: { ar: number; ac: number; br: number; bc: number }[] = [];
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const p = board[r][c];
+      if (!p || isWhite(p)) continue;
+      for (let r2 = 0; r2 < 8; r2++) {
+        for (let c2 = 0; c2 < 8; c2++) {
+          if (r === r2 && c === c2) continue;
+          const t = board[r2][c2];
+          if (t && !isWhite(t)) continue;
+          // batasi jarak max 2 kotak biar tidak chaos
+          if (Math.abs(r - r2) + Math.abs(c - c2) > 3) continue;
+          moves.push({ ar: r, ac: c, br: r2, bc: c2 });
+        }
+      }
+    }
+  }
+  if (!moves.length) return;
+  const m = moves[Math.floor(Math.random() * moves.length)];
+  board[m.br][m.bc] = board[m.ar][m.ac];
+  board[m.ar][m.ac] = null;
+}
+
+export async function chess2(ctx: CmdCtx): Promise<CmdResult> {
+  const arg = (ctx.arg || "").trim().toLowerCase();
+  const existing = getGame(ctx.bot.id, ctx.n.remoteJid);
+
+  if (!arg || arg === "new" || arg === "start") {
+    const board = chessEmptyBoard();
+    setGame(ctx.bot.id, ctx.n.remoteJid, {
+      kind: "chess2",
+      data: { board, turn: "w", history: [] },
+      startedAt: Date.now(),
+    });
+    return { text: chessRender(board, "w") };
+  }
+
+  if (arg === "resign" || arg === "surrender" || arg === "batal") {
+    delGame(ctx.bot.id, ctx.n.remoteJid);
+    return { text: "🏳️ Game chess2 dibatalkan. Ketik *.chess2* untuk main lagi." };
+  }
+
+  if (!existing || existing.kind !== "chess2") {
+    return { text: `Belum ada game. Mulai: *${ctx.bot.prefix}chess2*` };
+  }
+
+  const data = existing.data as { board: (string | null)[][]; turn: "w" | "b"; history: string[] };
+  // e2e4 or e2 e4
+  const m = arg.replace(/\s+/g, "").match(/^([a-h][1-8])([a-h][1-8])$/i);
+  if (!m) {
+    return {
+      text:
+        "Format gerak: *.chess2 e2e4*\n" +
+        chessRender(data.board, data.turn),
+    };
+  }
+
+  const result = chessTryMove(data.board, m[1], m[2], data.turn);
+  if (!result.ok) return { text: `⚠️ ${result.msg}\n` + chessRender(data.board, data.turn) };
+
+  data.history.push(m[1] + m[2]);
+  data.turn = "b";
+  chessBotMove(data.board);
+  data.turn = "w";
+  setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "chess2", data, startedAt: Date.now() });
+  return { text: chessRender(data.board, "w") };
+}
+
+
 export async function answerGame(ctx: CmdCtx, text: string): Promise<CmdResult | null> {
   const g = getGame(ctx.bot.id, ctx.n.remoteJid);
   if (!g) return null;

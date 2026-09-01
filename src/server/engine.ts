@@ -1449,13 +1449,28 @@ async function sendMedia(rb: RunningBot, to: string, media: {
 
 /* ================================ AI ================================= */
 async function aiRespond(bot: BotRow, userText: string): Promise<string | null> {
-  const ai = (bot.settings as any)?.ai;
-  if (!ai?.enabled) return null;
-  const key = process.env.GEMINI_API_KEY || process.env.AI_API_KEY;
-  if (!key)
-    return "⚠️ AI belum dikonfigurasi di server (GEMINI_API_KEY belum diset). Bot tetap online.";
+  const bs = (bot.settings as any) || {};
+  const ai = bs.ai || {};
+  // Auto-reply AI hanya jika enabled; command .ai tetap lewat ai.ts
+  if (ai.enabled === false) return null;
+  const key = String(bs.geminiApiKey || bs.aiApiKey || process.env.GEMINI_API_KEY || process.env.AI_API_KEY || "").trim();
+  if (!key) {
+    // Jangan spam error di auto-reply jika key belum diisi
+    if (!ai.enabled) return null;
+    return "⚠️ AI belum dikonfigurasi. Isi *API Key AI* di Dashboard bot.";
+  }
   try {
-    const base = process.env.GEMINI_API_BASE || process.env.AI_BASE_URL || (process.env.GEMINI_API_KEY ? "https://generativelanguage.googleapis.com/v1beta/openai" : "https://api.openai.com/v1");
+    const keyLower = key.toLowerCase();
+    const isGeminiKey = key.startsWith("AIza") || keyLower.includes("gemini");
+    const configuredBase = String(bs.aiBaseUrl || process.env.AI_BASE_URL || process.env.GEMINI_API_BASE || "").trim().replace(/\/$/, "");
+    const base =
+      configuredBase ||
+      (isGeminiKey
+        ? "https://generativelanguage.googleapis.com/v1beta/openai"
+        : "https://api.openai.com/v1");
+    const model =
+      String(bs.aiModel || ai.model || process.env.GEMINI_MODEL || process.env.AI_MODEL || "").trim() ||
+      (isGeminiKey ? "gemini-2.5-flash-lite" : "gpt-4o-mini");
     const res = await fetch(`${base}/chat/completions`, {
       method: "POST",
       headers: {
@@ -1463,7 +1478,7 @@ async function aiRespond(bot: BotRow, userText: string): Promise<string | null> 
         authorization: `Bearer ${key}`,
       },
       body: JSON.stringify({
-        model: ai.model || process.env.GEMINI_MODEL || process.env.AI_MODEL || "gemini-2.5-flash-lite",
+        model,
         temperature: Number(ai.temperature ?? process.env.GEMINI_TEMPERATURE ?? 0.7),
         max_tokens: Number(ai.maxTokens ?? process.env.GEMINI_MAX_OUTPUT_TOKENS ?? 8192),
         messages: [

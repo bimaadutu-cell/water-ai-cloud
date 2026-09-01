@@ -180,6 +180,7 @@ export const REGISTRY: RegistryCommand[] = [
   c("securitylog", "security", "Log keamanan grup"),
 
   /* 🎮 FUN — real games & free APIs */
+  c("chess2", "fun", "Main catur vs bot (fun mode): .chess2 / .chess2 e2e4"),
   c("quiz", "fun", "Kuis sains (OpenTDB)"),
   c("trivia", "fun", "Alias .quiz"),
   c("tebakkata", "fun", "Tebak kata (Jawab: jawaban)"),

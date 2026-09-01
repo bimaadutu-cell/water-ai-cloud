@@ -11,7 +11,7 @@ async function aiChat(
   const bs = opts.botSettings || {};
   const key = (bs.geminiApiKey || bs.aiApiKey || process.env.GEMINI_API_KEY || process.env.AI_API_KEY || "").trim();
   if (!key)
-    return "⚠️ AI belum dikonfigurasi. Isi *API Key AI* di Dashboard bot ATAU set GEMINI_API_KEY / AI_API_KEY di .env server.";
+    return "⚠️ AI belum dikonfigurasi. Buka *Dashboard → Bots → Settings* lalu isi *API Key AI* (Gemini AIza... / OpenAI sk-...).";
 
   const keyLower = key.toLowerCase();
   const isGeminiKey = key.startsWith("AIza") || keyLower.includes("gemini");

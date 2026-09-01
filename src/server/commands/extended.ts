@@ -97,7 +97,7 @@ export async function sandboxdeploy(ctx: CmdCtx): Promise<CmdResult> {
         "Reply *file .zip* project web (Next.js / HTML / Node), lalu:",
         `*${ctx.bot.prefix}sandboxdeploy*`,
         "",
-        "Bot akan: upload → extract → npm install → build (jika Next) → serve :3000 → URL publik.",
+        "Bot: upload → extract → install → build → serve :3000 → URL publik.",
       ]),
     };
   }
@@ -136,16 +136,12 @@ export async function sandboxdeploy(ctx: CmdCtx): Promise<CmdResult> {
     });
     const sandboxId = sandbox.sandboxId;
 
-    /** Run shell; never throw on non-zero exit */
-    async function sh(cmd: string, timeoutMs = 180_000, background = false): Promise<string> {
+    async function sh(cmd: string, timeoutMs = 180_000): Promise<string> {
       const full = `bash -lc ${JSON.stringify(cmd + "\nexit 0")}`;
       try {
-        const opts: any = { timeoutMs };
-        if (background) opts.background = true;
-        const res: any = await sandbox.commands.run(full, opts);
-        return String(res?.stdout || "");
+        const res: any = await sandbox.commands.run(full, { timeoutMs } as any);
+        return String(res?.stdout || res?.stderr || "");
       } catch (e: any) {
-        if (background) return "bg";
         return String(e?.result?.stdout || e?.stdout || e?.message || "");
       }
     }
@@ -160,70 +156,94 @@ export async function sandboxdeploy(ctx: CmdCtx): Promise<CmdResult> {
       [
         "mkdir -p /home/user/app",
         "cd /home/user",
-        "rm -rf app/*",
+        "rm -rf app",
+        "mkdir -p app",
         "unzip -o project.zip -d app 2>/dev/null || python3 -c \"import zipfile; zipfile.ZipFile('project.zip').extractall('app')\"",
         "cd /home/user/app",
-        // flatten one root folder
         "count=$(find . -mindepth 1 -maxdepth 1 | wc -l)",
         'if [ "$count" -eq 1 ]; then',
         '  sub=$(find . -mindepth 1 -maxdepth 1 -type d | head -1)',
         '  if [ -n "$sub" ]; then shopt -s dotglob; mv "$sub"/* . 2>/dev/null; rmdir "$sub" 2>/dev/null; fi',
         "fi",
-        "ls -la | head -25",
-        "test -f package.json && echo HAS_PACKAGE_JSON || echo NO_PACKAGE_JSON",
-        "test -f next.config.js -o -f next.config.mjs -o -f next.config.ts && echo HAS_NEXT || true",
+        "ls -la | head -30",
       ].join("\n"),
       120_000
     );
 
-    // Detect project type
     const detect = await sh(
       "cd /home/user/app; " +
         "if [ -f package.json ]; then " +
-        "  if grep -q next package.json 2>/dev/null || [ -f next.config.js ] || [ -f next.config.mjs ] || [ -f next.config.ts ]; then echo TYPE=next; " +
-        "  elif grep -q '\"start\"' package.json; then echo TYPE=node; " +
+        "  if grep -qi next package.json 2>/dev/null || [ -f next.config.js ] || [ -f next.config.mjs ] || [ -f next.config.ts ]; then echo TYPE=next; " +
         "  else echo TYPE=node; fi; " +
-        "elif [ -f index.html ] || [ -f public/index.html ]; then echo TYPE=static; " +
+        "elif [ -f index.html ]; then echo TYPE=static; " +
+        "elif [ -f public/index.html ]; then echo TYPE=static_public; " +
         "else echo TYPE=static; fi",
       30_000
     );
     const isNext = /TYPE=next/i.test(detect);
     const isNode = /TYPE=node/i.test(detect) || isNext;
+    const isStaticPublic = /TYPE=static_public/i.test(detect);
 
     if (isNode) {
-      if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "📥 npm install...");
+      if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "📥 npm install (bisa lama)...");
       await sh(
-        "cd /home/user/app && npm install --no-audit --no-fund 2>&1 | tail -15",
-        400_000
+        "cd /home/user/app && (npm install --no-audit --no-fund --legacy-peer-deps 2>&1 || yarn install 2>&1 || pnpm install 2>&1) | tail -20",
+        450_000
       );
 
       if (isNext) {
-        if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🔨 next build (bisa 1–3 menit)...");
+        if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🔨 next build...");
         await sh(
           [
             "cd /home/user/app",
-            "export NODE_ENV=production",
-            "export NEXT_TELEMETRY_DISABLED=1",
-            // dummy env for build
+            "export NODE_ENV=production NEXT_TELEMETRY_DISABLED=1",
             "export DATABASE_URL=\"${DATABASE_URL:-postgresql://u:p@127.0.0.1:5432/db}\"",
             "export AUTH_SECRET=\"${AUTH_SECRET:-sandbox-build-secret}\"",
-            "npx next build 2>&1 | tail -30 || npm run build 2>&1 | tail -30 || true",
-            "ls -la .next 2>/dev/null | head -5 || echo NO_NEXT_DIR",
+            "export NEXTAUTH_SECRET=\"${NEXTAUTH_SECRET:-sandbox-build-secret}\"",
+            "(npx next build 2>&1 || npm run build 2>&1) | tail -40",
+            "ls -la .next 2>/dev/null | head -8 || echo NO_NEXT_DIR",
           ].join("\n"),
-          500_000
+          600_000
         );
       }
     }
 
-    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🚀 Start server :3000...");
-    await sh("pkill -f 'http.server 3000' 2>/dev/null; pkill -f 'next start' 2>/dev/null; pkill -f 'node.*3000' 2>/dev/null; true", 15_000);
-
-    if (isNext) {
-      // Prefer next start after build; fallback next dev
+    // Pastikan ada index.html untuk static (hindari 404 kosong)
+    if (!isNode) {
       await sh(
         [
           "cd /home/user/app",
-          "export PORT=3000 HOSTNAME=0.0.0.0 HOST=0.0.0.0 NODE_ENV=production",
+          "if [ ! -f index.html ] && [ -f public/index.html ]; then cp public/index.html ./index.html; fi",
+          "if [ ! -f index.html ]; then",
+          "  cat > index.html << 'HTML'",
+          "<!DOCTYPE html><html><head><meta charset=utf-8><title>Sandbox Deploy</title>",
+          "<style>body{font-family:system-ui;background:#0b1020;color:#e2e8f0;padding:2rem}",
+          "a{color:#38bdf8}</style></head><body>",
+          "<h1>💧 Sandbox Deploy OK</h1>",
+          "<p>Project diekstrak. Tidak ada index.html di root — listing file:</p><ul>",
+          "HTML",
+          "  find . -maxdepth 2 -type f | head -40 | while read f; do echo \"<li>$f</li>\"; done >> index.html",
+          "  echo '</ul></body></html>' >> index.html",
+          "fi",
+        ].join("\n"),
+        30_000
+      );
+    }
+
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🚀 Start server :3000...");
+    // Hanya satu server — jangan tumpuk python di atas next
+    await sh(
+      "pkill -f 'http.server' 2>/dev/null; pkill -f 'next start' 2>/dev/null; pkill -f 'next-server' 2>/dev/null; pkill -f 'node.*3000' 2>/dev/null; sleep 1; true",
+      15_000
+    );
+
+    let serveMode = "static";
+    if (isNext) {
+      serveMode = "next";
+      await sh(
+        [
+          "cd /home/user/app",
+          "export PORT=3000 HOSTNAME=0.0.0.0 HOST=0.0.0.0 NODE_ENV=production NEXT_TELEMETRY_DISABLED=1",
           "export DATABASE_URL=\"${DATABASE_URL:-postgresql://u:p@127.0.0.1:5432/db}\"",
           "export AUTH_SECRET=\"${AUTH_SECRET:-sandbox-secret}\"",
           "if [ -d .next ]; then",
@@ -232,12 +252,13 @@ export async function sandboxdeploy(ctx: CmdCtx): Promise<CmdResult> {
           "  nohup npx next dev -H 0.0.0.0 -p 3000 > /tmp/serve.log 2>&1 &",
           "fi",
           "echo $! > /tmp/serve.pid",
-          "sleep 4",
-          "head -30 /tmp/serve.log",
+          "sleep 6",
+          "head -40 /tmp/serve.log",
         ].join("\n"),
-        60_000
+        90_000
       );
     } else if (isNode) {
+      serveMode = "node";
       await sh(
         [
           "cd /home/user/app",
@@ -245,51 +266,53 @@ export async function sandboxdeploy(ctx: CmdCtx): Promise<CmdResult> {
           "if grep -q '\"start\"' package.json; then",
           "  nohup npm start > /tmp/serve.log 2>&1 &",
           "else",
-          "  nohup npx --yes serve -l 3000 . > /tmp/serve.log 2>&1 &",
+          "  nohup npx --yes serve -s -l 3000 . > /tmp/serve.log 2>&1 &",
           "fi",
           "echo $! > /tmp/serve.pid",
-          "sleep 3",
-          "head -20 /tmp/serve.log",
+          "sleep 4",
+          "head -30 /tmp/serve.log",
         ].join("\n"),
         60_000
       );
     } else {
+      const dir = isStaticPublic ? "/home/user/app/public" : "/home/user/app";
       await sh(
         [
-          "DIR=/home/user/app",
-          "[ -d /home/user/app/public ] && DIR=/home/user/app/public",
-          "[ -d /home/user/app/dist ] && DIR=/home/user/app/dist",
-          "[ -d /home/user/app/build ] && DIR=/home/user/app/build",
-          "nohup python3 -m http.server 3000 --bind 0.0.0.0 --directory \"$DIR\" > /tmp/serve.log 2>&1 &",
+          "DIR=" + dir,
+          'nohup python3 -m http.server 3000 --bind 0.0.0.0 --directory "$DIR" > /tmp/serve.log 2>&1 &',
           "echo $! > /tmp/serve.pid",
           "sleep 2",
+          "head -10 /tmp/serve.log",
         ].join("\n"),
         30_000
       );
     }
 
-    // SDK background backup for static
-    try {
-      await sandbox.commands.run(
-        "bash -lc 'python3 -m http.server 3000 --bind 0.0.0.0 --directory /home/user/app'",
-        { background: true, timeoutMs: 0 } as any
-      );
-    } catch { /* may already bound */ }
 
-    await new Promise((r) => setTimeout(r, isNext ? 8000 : 3000));
-    let probe = await sh("curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/ || echo FAIL", 20_000);
-    let portOk = /200|301|302|304|403|404/.test(probe);
+    await new Promise((r) => setTimeout(r, isNext ? 10000 : 3000));
+    let probe = await sh(
+      "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/ 2>/dev/null || echo FAIL",
+      20_000
+    );
+    let portOk = /200|301|302|304|307|308/.test(probe);
 
+    // Jika Next/Node gagal, baru fallback static (dengan index.html)
     if (!portOk) {
-      if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🔁 Fallback static server...");
+      if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🔁 Fallback static :3000...");
       await sh(
-        "pkill -f 'http.server' 2>/dev/null; " +
-          "nohup python3 -m http.server 3000 --bind 0.0.0.0 --directory /home/user/app > /tmp/serve.log 2>&1 & sleep 2; " +
+        [
+          "pkill -f 'http.server' 2>/dev/null; pkill -f 'next' 2>/dev/null; sleep 1",
+          "cd /home/user/app",
+          "if [ ! -f index.html ]; then echo '<h1>Deploy OK</h1><p>Server fallback.</p>' > index.html; fi",
+          "nohup python3 -m http.server 3000 --bind 0.0.0.0 --directory /home/user/app > /tmp/serve.log 2>&1 &",
+          "sleep 2",
           "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/",
+        ].join("\n"),
         30_000
       );
+      serveMode = "static-fallback";
       probe = await sh("curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/ || echo FAIL", 15_000);
-      portOk = /200|301|302|304|403|404/.test(probe);
+      portOk = /200|301|302|304|307|308/.test(probe);
     }
 
     const host = sandbox.getHost(3000);
@@ -300,14 +323,14 @@ export async function sandboxdeploy(ctx: CmdCtx): Promise<CmdResult> {
     return {
       text: box("✅ SANDBOX DEPLOYED", [
         `🧪 Sandbox : ${sandboxId}`,
-        `📦 Jenis   : ${kind}`,
+        `📦 Jenis   : ${kind} (${serveMode})`,
         `🔗 URL     : ${publicUrl}`,
         `⏱️ Aktif   : ±${Math.round(timeoutSec / 60)} menit`,
-        portOk ? "🟢 Port 3000 : OK" : "🟡 Port 3000 : warm-up — refresh 10–30 detik",
+        portOk ? "🟢 Root / : OK" : "🟡 Root / : masih warm-up — refresh 15–30 detik",
         "",
         isNext
-          ? "Next.js: npm install → build → next start. Jika blank, tunggu build selesai lalu refresh."
-          : "Buka URL di browser. Bisa dibagikan ke orang lain selama sandbox hidup.",
+          ? "Next.js butuh build sukses. Jika 404, buka URL lalu tunggu / cek log build."
+          : "Buka URL di browser. Bagikan selama sandbox hidup.",
       ]),
     };
   } catch (e: any) {
@@ -315,9 +338,10 @@ export async function sandboxdeploy(ctx: CmdCtx): Promise<CmdResult> {
     if (e instanceof CmdError) throw e;
     throw new CmdError(
       `🥀 Sandbox deploy gagal: ${String(e?.message || e).slice(0, 280)}\n` +
-        "Cek E2B_API_KEY, kuota, dan package e2b di server."
+        "Cek E2B API Key di Dashboard bot."
     );
   } finally {
     await fs.promises.rm(work, { recursive: true, force: true }).catch(() => {});
   }
 }
+
