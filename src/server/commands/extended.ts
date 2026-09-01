@@ -166,29 +166,14 @@ export async function sandboxdeploy(ctx: CmdCtx): Promise<CmdResult> {
 
     if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "📦 Upload ZIP ke sandbox...");
 
-    // Upload via envd filesystem API (multipart)
-    const form = new FormData();
-    form.append(
-      "file",
-      new Blob([quoted.buffer], { type: "application/zip" }),
-      "project.zip"
-    );
-    const uploadRes = await fetch(
-      `${envdBase}/files?path=${encodeURIComponent("/home/user/project.zip")}`,
-      {
-        method: "POST",
-        headers: {
-          "X-Access-Token": envdToken,
-          "E2b-Sandbox-Id": sandboxId,
-          "E2b-Sandbox-Port": "49983",
-        },
-        body: form,
-        signal: AbortSignal.timeout(120_000),
-      }
-    );
-    if (!uploadRes.ok) {
-      const errTxt = await uploadRes.text().catch(() => "");
-      // Fallback: raw body write
+    // Upload via envd filesystem API
+    // Copy into a plain Uint8Array (avoids Buffer/ArrayBufferLike TS friction)
+    const zipBytes = new Uint8Array(quoted.buffer.length);
+    zipBytes.set(quoted.buffer);
+
+    // Prefer raw octet-stream (simpler, no FormData/Blob typing issues)
+    let uploaded = false;
+    try {
       const rawRes = await fetch(
         `${envdBase}/files?path=${encodeURIComponent("/home/user/project.zip")}`,
         {
@@ -199,13 +184,39 @@ export async function sandboxdeploy(ctx: CmdCtx): Promise<CmdResult> {
             "E2b-Sandbox-Id": sandboxId,
             "E2b-Sandbox-Port": "49983",
           },
-          body: quoted.buffer,
+          body: zipBytes,
           signal: AbortSignal.timeout(120_000),
         }
       );
-      if (!rawRes.ok) {
+      if (rawRes.ok) uploaded = true;
+    } catch {
+      /* try multipart below */
+    }
+
+    if (!uploaded) {
+      const form = new FormData();
+      form.append(
+        "file",
+        new Blob([zipBytes], { type: "application/zip" }),
+        "project.zip"
+      );
+      const uploadRes = await fetch(
+        `${envdBase}/files?path=${encodeURIComponent("/home/user/project.zip")}`,
+        {
+          method: "POST",
+          headers: {
+            "X-Access-Token": envdToken,
+            "E2b-Sandbox-Id": sandboxId,
+            "E2b-Sandbox-Port": "49983",
+          },
+          body: form,
+          signal: AbortSignal.timeout(120_000),
+        }
+      );
+      if (!uploadRes.ok) {
+        const errTxt = await uploadRes.text().catch(() => "");
         throw new CmdError(
-          `🥀 Upload ZIP gagal (HTTP ${uploadRes.status}/${rawRes.status}): ${errTxt.slice(0, 120)}`
+          `🥀 Upload ZIP gagal (HTTP ${uploadRes.status}): ${errTxt.slice(0, 160)}`
         );
       }
     }
