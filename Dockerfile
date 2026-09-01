@@ -53,7 +53,8 @@ WORKDIR /app
 
 FROM base AS deps
 COPY package.json package-lock.json* ./
-RUN npm ci --include=dev --no-audit --no-fund || npm install --include=dev --no-audit --no-fund
+# Prefer npm install when lockfile missing/outdated (avoids ETARGET on new deps)
+RUN if [ -f package-lock.json ]; then       npm ci --include=dev --no-audit --no-fund || npm install --include=dev --no-audit --no-fund;     else       npm install --include=dev --no-audit --no-fund;     fi
 
 FROM base AS build
 COPY --from=deps /app/node_modules ./node_modules
