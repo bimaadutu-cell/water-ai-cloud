@@ -1246,13 +1246,25 @@ function makeCmdCtx(
           {}
         )) as Buffer;
         let mime = "application/octet-stream";
-        if (quoted.imageMessage) mime = "image/" + (String(quoted.imageMessage.mimetype || "jpeg").split("/")[1] || "jpeg");
-        else if (quoted.videoMessage) mime = String(quoted.videoMessage.mimetype || "video/mp4");
-        else if (quoted.audioMessage) mime = String(quoted.audioMessage.mimetype || "audio/ogg");
-        else if (quoted.documentMessage) mime = String(quoted.documentMessage.mimetype || "application/octet-stream");
-        else if (quoted.stickerMessage) mime = "image/webp";
-        else if (quoted.locationMessage) return null;
-        return { buffer: buf, mimetype: mime };
+        let filename: string | undefined;
+        if (quoted.imageMessage) {
+          mime = "image/" + (String(quoted.imageMessage.mimetype || "jpeg").split("/")[1] || "jpeg");
+          filename = quoted.imageMessage.fileName || undefined;
+        } else if (quoted.videoMessage) {
+          mime = String(quoted.videoMessage.mimetype || "video/mp4");
+          filename = quoted.videoMessage.fileName || undefined;
+        } else if (quoted.audioMessage) {
+          mime = String(quoted.audioMessage.mimetype || "audio/ogg");
+          filename = quoted.audioMessage.fileName || undefined;
+        } else if (quoted.documentMessage) {
+          mime = String(quoted.documentMessage.mimetype || "application/octet-stream");
+          filename = quoted.documentMessage.fileName || quoted.documentMessage.title || undefined;
+        } else if (quoted.stickerMessage) {
+          mime = "image/webp";
+        } else if (quoted.locationMessage) {
+          return null;
+        }
+        return { buffer: buf, mimetype: mime, filename };
       } catch {
         return null;
       }

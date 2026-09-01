@@ -38,7 +38,7 @@ export interface CmdCtx {
   arg: string;
   startedAt: number;
   replyKey: any | null;
-  getRepliedMedia: () => Promise<{ buffer: Buffer; mimetype: string } | null>;
+  getRepliedMedia: () => Promise<{ buffer: Buffer; mimetype: string; filename?: string } | null>;
 }
 
 export interface CmdMedia {

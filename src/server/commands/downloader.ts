@@ -149,9 +149,8 @@ async function extractInfo(source: string): Promise<ExtractedInfo> {
     BROWSER_USER_AGENT,
     "--add-header",
     "Accept-Language:en-US,en;q=0.9",
-    // Client android sering lebih stabil tanpa cookie
     "--extractor-args",
-    "youtube:player_client=android,web;player_skip=webpage,configs",
+    "youtube:player_client=android,ios,web,mweb;player_skip=webpage,configs",
   ];
   if (/tiktok.com|douyin.com/i.test(source)) args.push("--referer", "https://www.tiktok.com/");
   args.push(source);
@@ -324,9 +323,17 @@ function commonArgs(outputTemplate: string, source: string): string[] {
     "Accept-Language:en-US,en;q=0.9",
   ];
   if (FF) args.push("--ffmpeg-location", FF);
-  // Client android mengurangi "Sign in to confirm you're not a bot"
+  // Multi-client reduces "Sign in to confirm you're not a bot"
   if (/youtube\.com|youtu\.be|ytsearch/i.test(source)) {
-    args.push("--extractor-args", "youtube:player_client=android,ios,web;player_skip=webpage,configs");
+    args.push(
+      "--extractor-args",
+      "youtube:player_client=android,ios,web,mweb,tv;player_skip=webpage,configs;skip=hls,dash"
+    );
+    // Optional cookies file for stubborn bot-checks
+    const cookies = process.env.YTDLP_COOKIES?.trim();
+    if (cookies && fs.existsSync(cookies)) {
+      args.push("--cookies", cookies);
+    }
   }
   args.push(source);
   return args;
@@ -995,59 +1002,11 @@ export async function playV35(ctx: CmdCtx): Promise<CmdResult> {
     await progress(ctx.sock, ctx.n.remoteJid, key, previewCaption);
   }
 
-  // Step 3: unduh MP3 — multi engine
+  // Step 3: unduh MP3 — multi engine (yt-dlp dulu, lalu Cobalt, lalu converter)
   const ytUrl = info.webpageUrl || (/^https?:\/\//i.test(arg) ? arg : undefined);
-  const downloadSource = ytUrl || sourceFor(arg);
   const errors: string[] = [];
 
-  // 3a) Y2Mate-style endpoints
-  if (ytUrl && /youtube\.com|youtu\.be/i.test(ytUrl)) {
-    try {
-      if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "⬇️ Download via converter...");
-      const media = await tryY2MateStyle(ytUrl, info);
-      if (media) {
-        if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "✅ Selesai. Mengirim audio...");
-        return {
-          media: {
-            kind: "audio",
-            buffer: media.buffer,
-            filename: media.filename,
-            mimetype: media.mimetype || "audio/mpeg",
-            caption: mediaCaption(media, "audio"),
-            jpegThumbnail: media.thumbnail || thumbBuf,
-          },
-        };
-      }
-    } catch (e: any) {
-      errors.push(`converter: ${String(e?.message || e).slice(0, 80)}`);
-    }
-  }
-
-  // 3b) Cobalt self-hosted
-  if (ytUrl && process.env.COBALT_API_URL?.trim()) {
-    try {
-      if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "⬇️ Download via Cobalt...");
-      const media = await downloadWithCobalt(ytUrl, "audio", info);
-      if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "✅ Selesai. Mengirim audio...");
-      return {
-        media: {
-          kind: "audio",
-          buffer: media.buffer,
-          filename: media.filename,
-          mimetype: media.mimetype || "audio/mpeg",
-          caption: mediaCaption(media, "audio"),
-          jpegThumbnail: media.thumbnail || thumbBuf,
-        },
-      };
-    } catch (e: any) {
-      errors.push(`cobalt: ${String(e?.message || e).slice(0, 80)}`);
-    }
-  }
-
-  // 3c) yt-dlp dengan client android (lebih stabil)
-  try {
-    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, `⬇️ Mengunduh MP3: ${info.title.slice(0, 50)}`);
-    const media = await downloadWithYtDlp(downloadSource, "audio", info);
+  async function sendAudio(media: DownloadedMedia): Promise<CmdResult> {
     if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "✅ Selesai. Mengirim audio...");
     return {
       media: {
@@ -1059,14 +1018,60 @@ export async function playV35(ctx: CmdCtx): Promise<CmdResult> {
         jpegThumbnail: media.thumbnail || thumbBuf,
       },
     };
+  }
+
+  // 3a) yt-dlp (paling andal di Docker dengan binary resmi)
+  try {
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, `⬇️ Mengunduh MP3: ${info.title.slice(0, 50)}`);
+    // Prefer explicit YouTube URL; if only title, use ytsearch1
+    const src = ytUrl || `ytsearch1:${arg}`;
+    const media = await downloadWithYtDlp(src, "audio", info);
+    return await sendAudio(media);
   } catch (e: any) {
-    errors.push(`yt-dlp: ${String(e?.message || e).slice(0, 100)}`);
+    errors.push(`yt-dlp: ${String(e?.message || e).slice(0, 120)}`);
+  }
+
+  // 3b) Cobalt self-hosted (jika diset)
+  if (ytUrl && process.env.COBALT_API_URL?.trim()) {
+    try {
+      if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "⬇️ Download via Cobalt...");
+      const media = await downloadWithCobalt(ytUrl, "audio", info);
+      return await sendAudio(media);
+    } catch (e: any) {
+      errors.push(`cobalt: ${String(e?.message || e).slice(0, 80)}`);
+    }
+  }
+
+  // 3c) External converter (Y2Mate-style) — last resort
+  if (ytUrl && /youtube\.com|youtu\.be/i.test(ytUrl)) {
+    try {
+      if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "⬇️ Download via converter...");
+      const media = await tryY2MateStyle(ytUrl, info);
+      if (media) return await sendAudio(media);
+      errors.push("converter: no media");
+    } catch (e: any) {
+      errors.push(`converter: ${String(e?.message || e).slice(0, 80)}`);
+    }
+  }
+
+  // 3d) Second yt-dlp attempt with pure ytsearch if first used URL that failed
+  if (ytUrl) {
+    try {
+      if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "⬇️ Retry yt-dlp (ytsearch)...");
+      const media = await downloadWithYtDlp(`ytsearch1:${info.title}`, "audio", info);
+      return await sendAudio(media);
+    } catch (e: any) {
+      errors.push(`yt-dlp-retry: ${String(e?.message || e).slice(0, 80)}`);
+    }
   }
 
   if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🥀 Gagal download audio.");
   throw new CmdError(
     `🥀 Gagal mengunduh audio untuk *${info.title.slice(0, 50)}*.\n` +
-    `Coba tempel URL YouTube langsung, atau set COBALT_API_URL di server.\n` +
-    (errors.length ? `Detail: ${errors.join(" | ").slice(0, 200)}` : "")
+    `Tips:\n` +
+    `• Tempel URL YouTube lengkap (https://youtu.be/... )\n` +
+    `• Pastikan yt-dlp terpasang (Docker image sudah include)\n` +
+    `• Opsional: set COBALT_API_URL atau YTDLP_COOKIES di server\n` +
+    (errors.length ? `Detail: ${errors.join(" | ").slice(0, 220)}` : "")
   );
 }
