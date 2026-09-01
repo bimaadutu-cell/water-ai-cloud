@@ -691,7 +691,12 @@ async function updateBot(user: User, botId: string, body: any) {
   const patch: any = {};
   if (typeof body?.name === "string" && body.name.trim()) patch.name = body.name.trim().slice(0, 64);
   if (typeof body?.prefix === "string" && body.prefix) patch.prefix = body.prefix.slice(0, 4);
-  if (typeof body?.ownerNumber === "string") patch.ownerNumber = body.ownerNumber.replace(/\D/g, "").slice(0, 32) || null;
+  if (typeof body?.ownerNumber === "string") {
+    let o = body.ownerNumber.replace(/\D/g, "").slice(0, 32);
+    if (o.startsWith("0")) o = "62" + o.slice(1);
+    if (o.startsWith("8") && o.length >= 9 && o.length <= 13) o = "62" + o;
+    patch.ownerNumber = o || null;
+  }
   if (typeof body?.description === "string") patch.description = body.description.slice(0, 500);
   if (body?.settings && typeof body.settings === "object") {
     const nextSettings = { ...((current.settings ?? {}) as Record<string, unknown>) };

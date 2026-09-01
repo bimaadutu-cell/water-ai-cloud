@@ -669,16 +669,48 @@ function normalize(m: any): NormalizedMsg | null {
     : msg?.notificationMessage ? "notification"
     : msg?.pollUpdateMessage ? "poll" : "text";
   const isGroup = remoteJid.endsWith("@g.us");
-  const sender: string = key?.participant || key?.senderPn || remoteJid;
+  // WA multi-device / LID: prioritaskan field nomor asli (senderPn, participantPn, *Alt)
+  const sender: string =
+    key?.senderPn ||
+    key?.participantPn ||
+    key?.participantAlt ||
+    key?.remoteJidAlt ||
+    key?.participant ||
+    remoteJid;
   return { type, text, sender, remoteJid, isGroup, messageId: key?.id || "" };
 }
 
+/** Ambil digit nomor Indonesia-friendly dari JID / LID / teks bebas */
 export function normalizePhoneNumber(value: unknown): string {
   let raw = String(value ?? "").trim().toLowerCase();
   if (!raw) return "";
-  raw = raw.split("@")[0].split(":")[0].replace(/\D/g, "");
-  if (raw.startsWith("0")) raw = `62${raw.slice(1)}`;
-  return raw;
+  // Buang domain JID dan device suffix (:xx)
+  raw = raw.split("@")[0].split(":")[0];
+  // Jika masih mengandung non-digit (LID hash dll), ambil digit saja
+  let digits = raw.replace(/\D/g, "");
+  if (!digits) return "";
+  // 08xxxx → 628xxxx
+  if (digits.startsWith("0") && digits.length >= 9) digits = `62${digits.slice(1)}`;
+  // 8xxxx (tanpa 0/62) → 628xxxx bila panjang masuk akal HP ID
+  if (digits.startsWith("8") && digits.length >= 9 && digits.length <= 13 && !digits.startsWith("62")) {
+    digits = `62${digits}`;
+  }
+  return digits;
+}
+
+/** Semua bentuk nomor yang mungkin untuk matching owner */
+function phoneVariants(value: unknown): string[] {
+  const n = normalizePhoneNumber(value);
+  if (!n) return [];
+  const out = new Set<string>([n]);
+  if (n.startsWith("62") && n.length > 2) {
+    out.add(n.slice(2)); // tanpa 62
+    out.add(`0${n.slice(2)}`); // 08...
+  }
+  if (n.startsWith("0") && n.length > 1) {
+    out.add(`62${n.slice(1)}`);
+  }
+  return [...out];
 }
 
 export function normalizeJid(value: unknown): string {
@@ -691,13 +723,25 @@ export function normalizeJid(value: unknown): string {
 
 export function getSenderNumber(messageOrJid: any): string {
   const key = messageOrJid?.key ?? messageOrJid;
-  return normalizePhoneNumber(key?.participant || key?.senderPn || key?.remoteJid || messageOrJid);
+  return normalizePhoneNumber(
+    key?.senderPn ||
+      key?.participantPn ||
+      key?.participantAlt ||
+      key?.remoteJidAlt ||
+      key?.participant ||
+      key?.remoteJid ||
+      messageOrJid
+  );
 }
 
 export function isOwner(senderJid: unknown, ownerNumbers: unknown[]): boolean {
-  const sender = normalizePhoneNumber(senderJid);
-  if (!sender) return false;
-  return ownerNumbers.some((owner) => normalizePhoneNumber(owner) === sender);
+  const senderVars = phoneVariants(senderJid);
+  if (!senderVars.length) return false;
+  const ownerVars = new Set<string>();
+  for (const o of ownerNumbers) {
+    for (const v of phoneVariants(o)) ownerVars.add(v);
+  }
+  return senderVars.some((s) => ownerVars.has(s));
 }
 
 function participantIsAdmin(participant: any): boolean {
@@ -727,14 +771,17 @@ async function isBotAdmin(rb: RunningBot, groupId: string): Promise<boolean> {
 }
 
 async function resolvePermissions(rb: RunningBot, bot: BotRow, n: NormalizedMsg, ownerRows: { phone: string }[]) {
-  const sender = normalizePhoneNumber(n.sender);
-  const configuredOwners = [bot.ownerNumber, ...ownerRows.map((row) => row.phone)]
-    .map(normalizePhoneNumber)
-    .filter(Boolean);
-  const isOwner = configuredOwners.includes(sender);
+  // Kumpulkan semua kandidat nomor pengirim dari n.sender (sudah diprioritaskan di normalize)
+  const senderVars = phoneVariants(n.sender);
+  const configuredOwners = [bot.ownerNumber, ...ownerRows.map((row) => row.phone)].filter(Boolean);
+  const ownerVars = new Set<string>();
+  for (const o of configuredOwners) {
+    for (const v of phoneVariants(o)) ownerVars.add(v);
+  }
+  const isOwnerUser = senderVars.some((s) => ownerVars.has(s));
   const isGroupAdmin = n.isGroup ? await isGroupAdminForMessage(rb, n.remoteJid, n.sender) : false;
   const isBotAdmin = n.isGroup ? await isBotAdminForGroup(rb, n.remoteJid) : false;
-  return { isGroup: n.isGroup, isOwner, isGroupAdmin, isBotAdmin };
+  return { isGroup: n.isGroup, isOwner: isOwnerUser, isGroupAdmin, isBotAdmin };
 }
 
 async function isGroupAdminForMessage(rb: RunningBot, groupId: string, sender: string) {
@@ -873,7 +920,10 @@ async function handleIncoming(rb: RunningBot, bot: BotRow, m: any) {
       const cmd = cmdRows[0];
       if (cmd) {
         if (cmd.permissions === "owner" && !isBotOwner) {
-          await sendInternal(rb, n.remoteJid, "⛔ Hanya owner yang bisa memakai command ini.");
+          const hint = bot.ownerNumber
+            ? `Owner terdaftar: +${normalizePhoneNumber(bot.ownerNumber)}. Nomor Anda: +${normalizePhoneNumber(n.sender) || "?"}. Samakan format di Dashboard (62xxxxxxxxxx).`
+            : "Owner belum diset di Dashboard → Bots → Owner Number.";
+          await sendInternal(rb, n.remoteJid, `⛔ Hanya owner yang bisa memakai command ini.\n${hint}`);
           return;
         }
         if (cmd.permissions === "admin") {
