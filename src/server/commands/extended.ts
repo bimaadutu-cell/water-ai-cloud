@@ -73,7 +73,7 @@ export async function extendedCommand(ctx: CmdCtx): Promise<CmdResult> {
 }
 
 
-/** Deploy ZIP (reply dokumen .zip) ke E2B sandbox — URL hidup ~1–3 jam */
+/** Deploy ZIP (reply dokumen .zip) ke E2B sandbox — URL publik aktif ±1–3 jam */
 export async function sandboxdeploy(ctx: CmdCtx): Promise<CmdResult> {
   const bs = (ctx.bot.settings as any) || {};
   const e2bKey = (bs.e2bApiKey || process.env.E2B_API_KEY || "").trim();
@@ -85,7 +85,7 @@ export async function sandboxdeploy(ctx: CmdCtx): Promise<CmdResult> {
         "",
         `Lalu: reply file *.zip* → ketik *${ctx.bot.prefix}sandboxdeploy*`,
         "",
-        "Daftar key gratis: https://e2b.dev/dashboard?tab=keys",
+        "Daftar key: https://e2b.dev/dashboard?tab=keys",
       ]),
     };
   }
@@ -97,8 +97,7 @@ export async function sandboxdeploy(ctx: CmdCtx): Promise<CmdResult> {
         "Reply *file .zip* project web Anda, lalu ketik:",
         `*${ctx.bot.prefix}sandboxdeploy*`,
         "",
-        "Bot ekstrak ZIP → install deps (bila ada) → serve di port 3000 → kirim URL publik.",
-        "Sandbox aktif ±1–3 jam lalu otomatis mati.",
+        "Bot akan: upload ZIP → extract → install deps (bila ada) → jalankan HTTP server di port 3000 → kirim URL publik.",
       ]),
     };
   }
@@ -114,7 +113,7 @@ export async function sandboxdeploy(ctx: CmdCtx): Promise<CmdResult> {
         `MIME: ${quoted.mimetype || "-"}`,
         `Nama: ${filename || "-"}`,
         "",
-        "Reply file *.zip* (document), bukan foto/video/sticker.",
+        "Reply file *.zip* (document), bukan foto/video.",
       ]),
     };
   }
@@ -122,204 +121,167 @@ export async function sandboxdeploy(ctx: CmdCtx): Promise<CmdResult> {
 
   const key = await progress(ctx.sock, ctx.n.remoteJid, null, "⏳ Membuat sandbox E2B...");
   const work = await fs.promises.mkdtemp(path.join(tmpDir, "e2b-"));
+
   try {
-    // Official control plane: api.e2b.app (bukan api.e2b.dev)
     const templateID = (process.env.E2B_TEMPLATE_ID || bs.e2bTemplateId || "base").trim();
     const timeoutSec = Math.min(
       Number(process.env.E2B_TIMEOUT_SEC || 3600) || 3600,
       3 * 60 * 60
     );
 
-    const createRes = await fetch("https://api.e2b.app/sandboxes", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-API-Key": e2bKey,
-      },
-      body: JSON.stringify({
-        templateID,
-        timeout: timeoutSec,
-        metadata: { source: "water-ai-cloud", botId: String(ctx.bot.id || "") },
-      }),
-      signal: AbortSignal.timeout(90_000),
+    // Official E2B SDK — handles envd process + files correctly
+    const { Sandbox } = await import("e2b");
+    const sandbox = await Sandbox.create(templateID, {
+      apiKey: e2bKey,
+      timeoutMs: timeoutSec * 1000,
+      metadata: { source: "water-ai-cloud", botId: String(ctx.bot.id || "") },
     });
-    const createBody: any = await createRes.json().catch(() => ({}));
-    if (!createRes.ok) {
-      const detail = JSON.stringify(createBody).slice(0, 280);
-      throw new CmdError(
-        `🥀 E2B create gagal (HTTP ${createRes.status}): ${detail}\n` +
-          "Pastikan API key valid dan templateID benar (default: base)."
-      );
-    }
 
-    const sandboxId: string =
-      createBody.sandboxID || createBody.sandboxId || createBody.id;
-    if (!sandboxId) throw new CmdError("🥀 E2B tidak mengembalikan sandboxID.");
-
-    const envdToken: string =
-      createBody.envdAccessToken || createBody.accessToken || e2bKey;
-    const domain: string =
-      createBody.domain || process.env.E2B_DOMAIN || "e2b.app";
-
-    // envd host pattern: https://49983-<sandboxId>.<domain>
-    const envdBase = `https://49983-${sandboxId}.${domain}`;
+    const sandboxId = sandbox.sandboxId;
 
     if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "📦 Upload ZIP ke sandbox...");
 
-    // Upload via envd filesystem API
-    // Copy into a plain Uint8Array (avoids Buffer/ArrayBufferLike TS friction)
-    const zipBytes = new Uint8Array(quoted.buffer.length);
-    zipBytes.set(quoted.buffer);
+    // Write ZIP into sandbox filesystem
+    await sandbox.files.write("/home/user/project.zip", quoted.buffer);
 
-    // Prefer raw octet-stream (simpler, no FormData/Blob typing issues)
-    let uploaded = false;
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "📂 Extract project...");
+
+    // Extract; flatten single top-level folder if present
+    const extractResult = await sandbox.commands.run(
+      [
+        "mkdir -p /home/user/app",
+        "cd /home/user",
+        "(unzip -o project.zip -d app || tar -xf project.zip -C app || true)",
+        // If zip contains a single root folder, move its contents up
+        'ENTRIES=$(find app -mindepth 1 -maxdepth 1 | wc -l)',
+        'if [ "$ENTRIES" -eq 1 ]; then',
+        '  SUB=$(find app -mindepth 1 -maxdepth 1 -type d | head -1)',
+        '  if [ -n "$SUB" ]; then shopt -s dotglob; mv "$SUB"/* app/ 2>/dev/null; rmdir "$SUB" 2>/dev/null; fi',
+        "fi",
+        "ls -la /home/user/app | head -25",
+      ].join(" && "),
+      { cwd: "/home/user", timeoutMs: 120_000 }
+    );
+
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "📦 Install dependencies...");
+
+    // Install deps if package.json / requirements.txt exists
+    await sandbox.commands.run(
+      [
+        "cd /home/user/app",
+        "if [ -f package.json ]; then",
+        "  npm install --omit=dev --no-audit --no-fund 2>&1 | tail -8",
+        "elif [ -f requirements.txt ]; then",
+        "  pip3 install -r requirements.txt -q 2>&1 | tail -5",
+        "else",
+        "  echo NO_PACKAGE_MANAGER",
+        "fi",
+      ].join("\n"),
+      { cwd: "/home/user/app", timeoutMs: 300_000 }
+    ).catch(() => null);
+
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🚀 Start server di port 3000...");
+
+    // Choose start strategy and launch in BACKGROUND so the process keeps running
+    // python3 -m http.server is always available on E2B base template as reliable fallback
+    const startScript = [
+      "cd /home/user/app",
+      "rm -f /tmp/serve.log /tmp/serve.pid",
+      "if [ -f package.json ] && grep -q '\"start\"' package.json 2>/dev/null; then",
+      "  nohup env PORT=3000 HOST=0.0.0.0 npm start > /tmp/serve.log 2>&1 & echo $! > /tmp/serve.pid",
+      "elif [ -f package.json ] && grep -q '\"dev\"' package.json 2>/dev/null; then",
+      "  nohup env PORT=3000 HOST=0.0.0.0 npm run dev > /tmp/serve.log 2>&1 & echo $! > /tmp/serve.pid",
+      "elif [ -f index.html ] || [ -f public/index.html ] || [ -d dist ] || [ -d build ]; then",
+      "  DIR=.",
+      "  [ -d public ] && DIR=public",
+      "  [ -d dist ] && DIR=dist",
+      "  [ -d build ] && DIR=build",
+      "  nohup python3 -m http.server 3000 --bind 0.0.0.0 --directory \"$DIR\" > /tmp/serve.log 2>&1 & echo $! > /tmp/serve.pid",
+      "else",
+      "  nohup python3 -m http.server 3000 --bind 0.0.0.0 --directory /home/user/app > /tmp/serve.log 2>&1 & echo $! > /tmp/serve.pid",
+      "fi",
+      "sleep 2",
+      "echo PID=$(cat /tmp/serve.pid 2>/dev/null)",
+      "ss -tlnp 2>/dev/null | grep 3000 || netstat -tlnp 2>/dev/null | grep 3000 || true",
+      "curl -s -o /dev/null -w 'HTTP %{http_code}\\n' http://127.0.0.1:3000/ || true",
+      "head -20 /tmp/serve.log 2>/dev/null || true",
+    ].join("\n");
+
+    // Run start script once (it backgrounds the server with nohup)
+    const startOut = await sandbox.commands.run(startScript, {
+      cwd: "/home/user/app",
+      timeoutMs: 60_000,
+    });
+
+    // Also explicitly start python http.server in background via SDK (belt + suspenders)
+    // in case the nohup path failed
     try {
-      const rawRes = await fetch(
-        `${envdBase}/files?path=${encodeURIComponent("/home/user/project.zip")}`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/octet-stream",
-            "X-Access-Token": envdToken,
-            "E2b-Sandbox-Id": sandboxId,
-            "E2b-Sandbox-Port": "49983",
-          },
-          body: zipBytes,
-          signal: AbortSignal.timeout(120_000),
-        }
+      await sandbox.commands.run(
+        "python3 -m http.server 3000 --bind 0.0.0.0 --directory /home/user/app",
+        { background: true, cwd: "/home/user/app" }
       );
-      if (rawRes.ok) uploaded = true;
     } catch {
-      /* try multipart below */
+      /* may already be listening */
     }
 
-    if (!uploaded) {
-      const form = new FormData();
-      form.append(
-        "file",
-        new Blob([zipBytes], { type: "application/zip" }),
-        "project.zip"
+    // Wait a bit and probe port
+    await new Promise((r) => setTimeout(r, 2500));
+    let portOk = false;
+    try {
+      const probe = await sandbox.commands.run(
+        "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/ || echo FAIL",
+        { timeoutMs: 15_000 }
       );
-      const uploadRes = await fetch(
-        `${envdBase}/files?path=${encodeURIComponent("/home/user/project.zip")}`,
-        {
-          method: "POST",
-          headers: {
-            "X-Access-Token": envdToken,
-            "E2b-Sandbox-Id": sandboxId,
-            "E2b-Sandbox-Port": "49983",
-          },
-          body: form,
-          signal: AbortSignal.timeout(120_000),
-        }
-      );
-      if (!uploadRes.ok) {
-        const errTxt = await uploadRes.text().catch(() => "");
-        throw new CmdError(
-          `🥀 Upload ZIP gagal (HTTP ${uploadRes.status}): ${errTxt.slice(0, 160)}`
-        );
-      }
+      const code = String(probe.stdout || "").trim();
+      portOk = /^(200|301|302|304|403|404)/.test(code);
+    } catch {
+      portOk = false;
     }
 
-    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🔧 Extract & start server...");
-
-    // Run commands via envd process API (Connect-style / process)
-    async function runCmd(cmd: string, timeout = 180): Promise<{ ok: boolean; out: string }> {
+    // If still not up, force python static server in background
+    if (!portOk) {
+      if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🔁 Retry static server...");
       try {
-        // Preferred: /commands style used by some envd builds
-        const res = await fetch(`${envdBase}/commands`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Access-Token": envdToken,
-            "E2b-Sandbox-Id": sandboxId,
-            "E2b-Sandbox-Port": "49983",
-          },
-          body: JSON.stringify({
-            command: "bash",
-            args: ["-lc", cmd],
-            timeout,
-            cwd: "/home/user",
-          }),
-          signal: AbortSignal.timeout((timeout + 15) * 1000),
+        await sandbox.commands.run("pkill -f 'http.server 3000' 2>/dev/null || true", {
+          timeoutMs: 10_000,
         });
-        const text = await res.text().catch(() => "");
-        if (res.ok) return { ok: true, out: text.slice(0, 500) };
-
-        // Fallback: start process via /processes
-        const res2 = await fetch(`${envdBase}/processes`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Access-Token": envdToken,
-            "E2b-Sandbox-Id": sandboxId,
-          },
-          body: JSON.stringify({
-            cmd: "bash",
-            args: ["-lc", cmd],
-            timeout,
-          }),
-          signal: AbortSignal.timeout((timeout + 15) * 1000),
-        });
-        const text2 = await res2.text().catch(() => "");
-        return { ok: res2.ok, out: text2.slice(0, 500) };
-      } catch (e: any) {
-        return { ok: false, out: String(e?.message || e).slice(0, 200) };
-      }
+      } catch { /* ignore */ }
+      await sandbox.commands.run(
+        "python3 -m http.server 3000 --bind 0.0.0.0 --directory /home/user/app",
+        { background: true, cwd: "/home/user/app" }
+      );
+      await new Promise((r) => setTimeout(r, 2000));
     }
 
-    await runCmd(
-      "mkdir -p /home/user/app && cd /home/user && (unzip -o project.zip -d app 2>/dev/null || tar -xf project.zip -C app 2>/dev/null || true) && " +
-        "if [ -d app ] && [ $(find app -mindepth 1 -maxdepth 1 | wc -l) -eq 1 ]; then SUB=$(find app -mindepth 1 -maxdepth 1 -type d | head -1); if [ -n \"$SUB\" ]; then mv \"$SUB\"/* app/ 2>/dev/null; fi; fi && ls -la app | head -20",
-      120
-    );
-
-    await runCmd(
-      "cd /home/user/app && " +
-        "if [ -f package.json ]; then npm install --omit=dev --no-audit --no-fund 2>&1 | tail -5; " +
-        "elif [ -f requirements.txt ]; then pip3 install -r requirements.txt -q 2>&1 | tail -5; " +
-        "elif [ -f index.html ] || [ -f public/index.html ]; then echo STATIC; " +
-        "else echo NO_MANIFEST; fi",
-      240
-    );
-
-    // Start static/web server on 3000 in background
-    await runCmd(
-      "cd /home/user/app && " +
-        "( " +
-        "  if [ -f package.json ] && grep -q '\"start\"' package.json; then " +
-        "    (PORT=3000 npm start > /tmp/serve.log 2>&1 &) ; " +
-        "  elif [ -f package.json ] && grep -q '\"dev\"' package.json; then " +
-        "    (PORT=3000 npx --yes next start -p 3000 > /tmp/serve.log 2>&1 || PORT=3000 npm run dev > /tmp/serve.log 2>&1 &) ; " +
-        "  else " +
-        "    (npx --yes serve -l 3000 . > /tmp/serve.log 2>&1 || python3 -m http.server 3000 > /tmp/serve.log 2>&1 &) ; " +
-        "  fi " +
-        ") ; sleep 3 ; (curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/ || true) ; echo SERVE_STARTED",
-      90
-    );
-
-    // Public URL: port-forward style used by E2B
-    const publicUrl =
-      createBody.domain && !String(createBody.domain).includes("e2b")
-        ? `https://${createBody.domain}`
-        : `https://3000-${sandboxId}.${domain}`;
+    const host = sandbox.getHost(3000);
+    const publicUrl = `https://${host}`;
 
     if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "✅ Deploy selesai.");
+
+    // Note: do NOT kill the sandbox — leave it running so the URL stays live
     return {
       text: box("✅ SANDBOX DEPLOYED", [
         `🧪 Sandbox : ${sandboxId}`,
         `🔗 URL     : ${publicUrl}`,
         `⏱️ Aktif   : ±${Math.round(timeoutSec / 60)} menit`,
         `📦 Template: ${templateID}`,
+        portOk ? "🟢 Port 3000 : OK" : "🟡 Port 3000 : starting (tunggu 5–15 detik)",
         "",
         "Buka URL di browser. Sandbox otomatis mati setelah timeout.",
-        "Jika halaman kosong, tunggu 10–20 detik (npm start masih warm-up).",
+        "File project ada di /home/user/app di dalam sandbox.",
+        extractResult?.stdout
+          ? `Extract: ${String(extractResult.stdout).split("\\n").slice(0, 3).join(" | ").slice(0, 120)}`
+          : "",
       ]),
     };
   } catch (e: any) {
     if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🥀 Deploy gagal.");
     if (e instanceof CmdError) throw e;
-    throw new CmdError(`🥀 Sandbox deploy gagal: ${String(e?.message || e).slice(0, 220)}`);
+    const msg = String(e?.message || e).slice(0, 280);
+    throw new CmdError(
+      `🥀 Sandbox deploy gagal: ${msg}\n` +
+        "Cek E2B_API_KEY, kuota E2B, dan pastikan package `e2b` terinstall di server."
+    );
   } finally {
     await fs.promises.rm(work, { recursive: true, force: true }).catch(() => {});
   }
