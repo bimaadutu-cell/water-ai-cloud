@@ -33,7 +33,8 @@
     "typescript": "^5.9.3",
     "zod": "^4.4.3",
     "e2b": "^2.8.0",
-    "@sairidev/baileys-new": "0.3.21"
+    "@sairidev/baileys-new": "0.3.21",
+    "@napi-rs/image": "^1.9.2"
   },
   "devDependencies": {
     "@types/node": "22.19.15",

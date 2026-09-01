@@ -7,7 +7,6 @@ import {
   makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
-  Browsers,
   downloadMediaMessage,
 } from "@sairidev/baileys-new";
 import { db } from "@/db";
@@ -99,9 +98,9 @@ async function attachSocket(rb: RunningBot) {
   rb.authState = state;
   const sock = makeWASocket({
     auth: state,
-    // Descriptor protokol yang didukung Baileys: Ubuntu / Chrome / 22.04.4.
-    // Ini tidak menjalankan Chrome palsu; koneksi tetap WebSocket langsung ke WhatsApp.
-    browser: Browsers.ubuntu("Chrome"),
+    // Platform identity: Ubuntu + Chrome + 22.04 (WA multi-device)
+    // Koneksi tetap WebSocket Baileys; QR & pairing code tidak diubah.
+    browser: ["Ubuntu", "Chrome", "22.04"] as any,
     syncFullHistory: false,
     markOnlineOnConnect: true,
     logger: pino({ level: "silent" }) as any,

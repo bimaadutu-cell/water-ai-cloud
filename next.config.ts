@@ -15,14 +15,23 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  // Jangan bundle Baileys / native deps ke Turbopack — pakai require runtime Node
   serverExternalPackages: [
+    "@sairidev/baileys-new",
     "@whiskeysockets/baileys",
+    "@napi-rs/image",
+    "libsignal",
+    "protobufjs",
     "qrcode",
     "pino",
     "sharp",
+    "jimp",
     "ffmpeg-static",
     "file-type",
     "pdf-lib",
+    "e2b",
+    "ws",
+    "music-metadata",
   ],
   async headers() {
     return [
