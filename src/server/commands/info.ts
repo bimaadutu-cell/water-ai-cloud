@@ -784,51 +784,379 @@ function chessBotMove(board: (string | null)[][]): void {
   board[m.ar][m.ac] = null;
 }
 
+
+async function chessBoardImage(
+  board: (string | null)[][],
+  turn: "w" | "b",
+  selected?: string | null,
+  targets?: string[],
+  overlay?: string[],
+  statusLine?: string,
+  subtitle?: string
+): Promise<Buffer | null> {
+  try {
+    const { renderChessBoard } = await import("../interactive/render/chessBoard");
+    return await renderChessBoard({
+      board,
+      turn,
+      selected: selected || null,
+      targets: targets || [],
+      title: "CHESS2",
+      subtitle: subtitle || (turn === "w" ? "Giliran kamu" : "Bot sedang berpikir..."),
+      statusLine:
+        statusLine ||
+        (turn === "w" ? "Pilih bidak putih terlebih dahulu." : "Tunggu giliran berikutnya."),
+      overlayLines: overlay,
+    });
+  } catch (e) {
+    console.error("[CHESS2] board render failed", e);
+    return null;
+  }
+}
+
+/** Simple legal targets for white pieces in fun mode (enough for interactive UX). */
+function chessLegalTargets(board: (string | null)[][], from: string, turn: "w" | "b"): string[] {
+  const a = parseSquare(from);
+  if (!a) return [];
+  const piece = board[a.r][a.c];
+  if (!piece) return [];
+  if (turn === "w" && piece !== piece.toUpperCase()) return [];
+  if (turn === "b" && piece === piece.toUpperCase()) return [];
+
+  const out: string[] = [];
+  const push = (r: number, c: number) => {
+    if (r < 0 || r > 7 || c < 0 || c > 7) return;
+    const t = board[r][c];
+    const enemy = t && (turn === "w" ? t === t.toLowerCase() : t === t.toUpperCase());
+    if (!t || enemy) {
+      const sq = String.fromCharCode(97 + c) + String(8 - r);
+      out.push(sq);
+    }
+  };
+
+  const p = piece.toUpperCase();
+  if (p === "P") {
+    const dir = turn === "w" ? -1 : 1;
+    const startRank = turn === "w" ? 6 : 1;
+    if (!board[a.r + dir]?.[a.c]) {
+      push(a.r + dir, a.c);
+      if (a.r === startRank && !board[a.r + dir * 2]?.[a.c]) push(a.r + dir * 2, a.c);
+    }
+    // captures
+    for (const dc of [-1, 1]) {
+      const tr = a.r + dir;
+      const tc = a.c + dc;
+      if (tr >= 0 && tr < 8 && tc >= 0 && tc < 8) {
+        const t = board[tr][tc];
+        if (t && (turn === "w" ? t === t.toLowerCase() : t === t.toUpperCase())) push(tr, tc);
+      }
+    }
+  } else if (p === "N") {
+    for (const [dr, dc] of [
+      [2, 1], [2, -1], [-2, 1], [-2, -1],
+      [1, 2], [1, -2], [-1, 2], [-1, -2],
+    ]) push(a.r + dr, a.c + dc);
+  } else if (p === "K") {
+    for (let dr = -1; dr <= 1; dr++)
+      for (let dc = -1; dc <= 1; dc++)
+        if (dr || dc) push(a.r + dr, a.c + dc);
+  } else {
+    // R/B/Q approximate sliding for fun mode
+    const dirs: number[][] =
+      p === "R"
+        ? [[1, 0], [-1, 0], [0, 1], [0, -1]]
+        : p === "B"
+          ? [[1, 1], [1, -1], [-1, 1], [-1, -1]]
+          : [
+              [1, 0], [-1, 0], [0, 1], [0, -1],
+              [1, 1], [1, -1], [-1, 1], [-1, -1],
+            ];
+    for (const [dr, dc] of dirs) {
+      for (let s = 1; s < 8; s++) {
+        const rr = a.r + dr * s;
+        const cc = a.c + dc * s;
+        if (rr < 0 || rr > 7 || cc < 0 || cc > 7) break;
+        const t = board[rr][cc];
+        if (!t) {
+          push(rr, cc);
+        } else {
+          const enemy = turn === "w" ? t === t.toLowerCase() : t === t.toUpperCase();
+          if (enemy) push(rr, cc);
+          break;
+        }
+      }
+    }
+  }
+  return out;
+}
+
+const CHESS_BTNS = [
+  { id: "CHESS_UNDO", text: "↩ BATALKAN LANGKAH" },
+  { id: "CHESS_NEW", text: "GAME BARU" },
+];
+
 export async function chess2(ctx: CmdCtx): Promise<CmdResult> {
   const arg = (ctx.arg || "").trim().toLowerCase();
   const existing = getGame(ctx.bot.id, ctx.n.remoteJid);
 
+  // ---- NEW GAME ----
   if (!arg || arg === "new" || arg === "start") {
     const board = chessEmptyBoard();
     setGame(ctx.bot.id, ctx.n.remoteJid, {
       kind: "chess2",
-      data: { board, turn: "w", history: [] },
+      data: { board, turn: "w", history: [], selected: null, targets: [] as string[] },
       startedAt: Date.now(),
     });
-    return { text: chessRender(board, "w") };
+    const img = await chessBoardImage(
+      board,
+      "w",
+      null,
+      [],
+      ["Pilih bidak putih terlebih dahulu"],
+      "Pilih bidak putih terlebih dahulu.",
+      "Giliran kamu"
+    );
+    if (img) {
+      return {
+        buttons: CHESS_BTNS,
+        media: {
+          kind: "image" as const,
+          buffer: img,
+          mimetype: "image/png",
+          caption:
+            "♟️ *CHESS2* — VS BOT · FUN MODE\n" +
+            "Giliran kamu — Putih\n\n" +
+            "Ketuk tombol atau ketik: `.chess2 e2` lalu `.chess2 e4`",
+        },
+      };
+    }
+    return { text: chessRender(board, "w"), buttons: CHESS_BTNS };
   }
 
-  if (arg === "resign" || arg === "surrender" || arg === "batal") {
+  // ---- RESIGN / CANCEL ----
+  if (arg === "resign" || arg === "surrender" || arg === "batal" || arg === "undo") {
+    if (arg === "undo" && existing?.kind === "chess2") {
+      // soft undo: clear selection
+      const data = existing.data as any;
+      data.selected = null;
+      data.targets = [];
+      setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "chess2", data, startedAt: Date.now() });
+      const img = await chessBoardImage(data.board, data.turn, null, [], undefined, "Pilih bidak putih terlebih dahulu.", "Giliran kamu");
+      if (img) {
+        return {
+          buttons: CHESS_BTNS,
+          media: {
+            kind: "image" as const,
+            buffer: img,
+            mimetype: "image/png",
+            caption: "↩ Langkah dibatalkan. Pilih bidak lagi.",
+          },
+        };
+      }
+    }
     delGame(ctx.bot.id, ctx.n.remoteJid);
-    return { text: "🏳️ Game chess2 dibatalkan. Ketik *.chess2* untuk main lagi." };
+    return {
+      text: "🏳️ Game dibatalkan. Ketik *.chess2* untuk main lagi.",
+      buttons: [{ id: "CHESS_NEW", text: "GAME BARU" }],
+    };
   }
 
   if (!existing || existing.kind !== "chess2") {
     return { text: `Belum ada game. Mulai: *${ctx.bot.prefix}chess2*` };
   }
 
-  const data = existing.data as { board: (string | null)[][]; turn: "w" | "b"; history: string[] };
-  // e2e4 or e2 e4
+  const data = existing.data as {
+    board: (string | null)[][];
+    turn: "w" | "b";
+    history: string[];
+    selected?: string | null;
+    targets?: string[];
+  };
+
+  // Single square: select piece OR destination
+  const single = arg.match(/^([a-h][1-8])$/i);
+  if (single) {
+    const sq = single[1].toLowerCase();
+    // If already selected from → treat as destination
+    if (data.selected) {
+      const from = data.selected;
+      const to = sq;
+      const result = chessTryMove(data.board, from, to, data.turn);
+      if (!result.ok) {
+        const img = await chessBoardImage(
+          data.board,
+          data.turn,
+          from,
+          data.targets || [],
+          undefined,
+          result.msg || "Langkah tidak valid",
+          "Giliran kamu"
+        );
+        if (img) {
+          return {
+            buttons: CHESS_BTNS,
+            media: {
+              kind: "image" as const,
+              buffer: img,
+              mimetype: "image/png",
+              caption: `⚠️ ${result.msg}`,
+            },
+          };
+        }
+        return { text: `⚠️ ${result.msg}\n` + chessRender(data.board, data.turn), buttons: CHESS_BTNS };
+      }
+      data.history.push(from + to);
+      data.selected = null;
+      data.targets = [];
+      data.turn = "b";
+      chessBotMove(data.board);
+      data.turn = "w";
+      setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "chess2", data, startedAt: Date.now() });
+      const img = await chessBoardImage(
+        data.board,
+        "w",
+        null,
+        [],
+        [`Gerak: ${from}${to}`, "Giliran kamu lagi"],
+        "Pilih bidak putih terlebih dahulu.",
+        "Giliran kamu"
+      );
+      if (img) {
+        return {
+          buttons: CHESS_BTNS,
+          media: {
+            kind: "image" as const,
+            buffer: img,
+            mimetype: "image/png",
+            caption: `♟️ Gerak *${from}${to}* · Bot sudah balas\nGiliran kamu — Putih`,
+          },
+        };
+      }
+      return { text: chessRender(data.board, "w"), buttons: CHESS_BTNS };
+    }
+
+    // Select origin square
+    const piece = (() => {
+      const p = parseSquare(sq);
+      return p ? data.board[p.r][p.c] : null;
+    })();
+    if (!piece || piece !== piece.toUpperCase()) {
+      const img = await chessBoardImage(data.board, data.turn, null, [], undefined, "Pilih bidak putih yang valid.", "Giliran kamu");
+      if (img) {
+        return {
+          buttons: CHESS_BTNS,
+          media: {
+            kind: "image" as const,
+            buffer: img,
+            mimetype: "image/png",
+            caption: `⚠️ Tidak ada bidak putih di *${sq}*`,
+          },
+        };
+      }
+      return { text: `⚠️ Tidak ada bidak putih di ${sq}`, buttons: CHESS_BTNS };
+    }
+    const targets = chessLegalTargets(data.board, sq, "w");
+    data.selected = sq;
+    data.targets = targets;
+    setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "chess2", data, startedAt: Date.now() });
+    const img = await chessBoardImage(
+      data.board,
+      "w",
+      sq,
+      targets,
+      undefined,
+      targets.length ? `${targets.length} langkah tersedia.` : "Tidak ada langkah legal.",
+      "Giliran kamu"
+    );
+    if (img) {
+      return {
+        buttons: CHESS_BTNS,
+        media: {
+          kind: "image" as const,
+          buffer: img,
+          mimetype: "image/png",
+          caption:
+            `Kotak *${sq}* dipilih\n` +
+            (targets.length
+              ? `${targets.length} langkah tersedia.\nPilih kotak tujuan (contoh: \`.chess2 ${targets[0]}\`)`
+              : "Tidak ada langkah tersedia."),
+        },
+      };
+    }
+    return {
+      text: `Kotak ${sq} dipilih · ${targets.length} langkah tersedia`,
+      buttons: CHESS_BTNS,
+    };
+  }
+
+  // Full move e2e4
   const m = arg.replace(/\s+/g, "").match(/^([a-h][1-8])([a-h][1-8])$/i);
   if (!m) {
+    const img = await chessBoardImage(data.board, data.turn, data.selected || null, data.targets || []);
+    if (img) {
+      return {
+        buttons: CHESS_BTNS,
+        media: {
+          kind: "image" as const,
+          buffer: img,
+          mimetype: "image/png",
+          caption: "Format: *.chess2 e2* lalu *.chess2 e4*  atau  *.chess2 e2e4*",
+        },
+      };
+    }
     return {
-      text:
-        "Format gerak: *.chess2 e2e4*\n" +
-        chessRender(data.board, data.turn),
+      text: "Format gerak: *.chess2 e2e4*\n" + chessRender(data.board, data.turn),
+      buttons: CHESS_BTNS,
     };
   }
 
   const result = chessTryMove(data.board, m[1], m[2], data.turn);
-  if (!result.ok) return { text: `⚠️ ${result.msg}\n` + chessRender(data.board, data.turn) };
+  if (!result.ok) {
+    const img = await chessBoardImage(data.board, data.turn, m[1], data.targets || [], undefined, result.msg);
+    if (img) {
+      return {
+        buttons: CHESS_BTNS,
+        media: {
+          kind: "image" as const,
+          buffer: img,
+          mimetype: "image/png",
+          caption: `⚠️ ${result.msg}`,
+        },
+      };
+    }
+    return { text: `⚠️ ${result.msg}\n` + chessRender(data.board, data.turn), buttons: CHESS_BTNS };
+  }
 
   data.history.push(m[1] + m[2]);
+  data.selected = null;
+  data.targets = [];
   data.turn = "b";
   chessBotMove(data.board);
   data.turn = "w";
   setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "chess2", data, startedAt: Date.now() });
-  return { text: chessRender(data.board, "w") };
-}
 
+  const img = await chessBoardImage(
+    data.board,
+    "w",
+    null,
+    [],
+    [`Gerak: ${m[1]}${m[2]}`],
+    "Pilih bidak putih terlebih dahulu.",
+    "Giliran kamu"
+  );
+  if (img) {
+    return {
+      buttons: CHESS_BTNS,
+      media: {
+        kind: "image" as const,
+        buffer: img,
+        mimetype: "image/png",
+        caption: `♟️ Gerak *${m[1]}${m[2]}* · Bot sudah balas\nGiliran kamu — Putih`,
+      },
+    };
+  }
+  return { text: chessRender(data.board, "w"), buttons: CHESS_BTNS };
+}
 
 export async function answerGame(ctx: CmdCtx, text: string): Promise<CmdResult | null> {
   const g = getGame(ctx.bot.id, ctx.n.remoteJid);

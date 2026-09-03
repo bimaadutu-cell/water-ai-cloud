@@ -137,6 +137,7 @@ export const REGISTRY: RegistryCommand[] = [
 
   /* 📥 DOWNLOADER — real pipeline: search → validate → download → send */
   c("play", "downloader", "Download audio otomatis: .play <judul/url>"),
+  c("play2", "downloader", "Interactive music player: .play2 <judul> (tombol pause/next/queue)"),
   c("allvid", "downloader", "Downloader video multi-engine: URL publik"),
   c("song", "downloader", "Alias .play (audio)"),
   c("audio", "downloader", "Alias .play (audio)"),

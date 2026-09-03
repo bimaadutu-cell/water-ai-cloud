@@ -30,6 +30,11 @@ import { runCommand, answerGame } from "./commands";
 import { REGISTRY } from "./commands/registry";
 import { consumeLimit, type CmdCtx } from "./commands/core";
 import { checkFlood } from "./commands/state";
+import {
+  extractActionId,
+  handleInteractiveResponse,
+} from "./interactive/router";
+import "./interactive"; // side-effect: register music & chess handlers
 
 /* ============================== state ============================== */
 interface RunningBot {
@@ -847,6 +852,67 @@ async function handleIncoming(rb: RunningBot, bot: BotRow, m: any) {
       .where(and(eq(banlist.botId, bot.id), eq(banlist.jid, n.sender)))
       .limit(1);
     if (banRow.length) return;
+  }
+
+  // ===== Interactive / Native Flow response handling =====
+  // Prefer real interactive router over treating button id as a text command.
+  if (n.type === "button" || n.type === "list" || (n.text && /^(WATER_|CHESS_|music_|chess_)/i.test(n.text))) {
+    const actionId = extractActionId(m.message) || n.text;
+    if (actionId && /^(WATER_|CHESS_|music_|chess_)/i.test(actionId)) {
+      try {
+        const ires = await handleInteractiveResponse({
+          botId: bot.id,
+          jid: n.remoteJid,
+          sender: n.sender,
+          actionId,
+          raw: m,
+          sock: rb.sock,
+          prefix,
+        });
+        if (ires) {
+          const chessArg = (ires as any)._chessCmd || (ires as any)._chessMove;
+          if (chessArg) {
+            // re-route to chess2 command (new / resign / undo / square / e2e4)
+            const { chess2 } = await import("./commands/info");
+            const fakeCtx = makeCmdCtx(rb, bot, m, n, t0, null);
+            (fakeCtx as any).arg = String(chessArg);
+            const chessResult = await chess2(fakeCtx as any).catch((e: any) => ({ text: String(e?.message || e) }));
+            if (chessResult?.media) {
+              const mediaBatch = Array.isArray(chessResult.media) ? chessResult.media : [chessResult.media];
+              if (chessResult.buttons?.length && mediaBatch.length === 1 && mediaBatch[0].kind === "image") {
+                await sendInteractive(
+                  rb,
+                  n.remoteJid,
+                  chessResult.text || mediaBatch[0].caption || "",
+                  chessResult.buttons,
+                  { kind: "image", buffer: mediaBatch[0].buffer, mimetype: mediaBatch[0].mimetype, caption: mediaBatch[0].caption || chessResult.text }
+                );
+              } else {
+                for (const item of mediaBatch) await sendMedia(rb, n.remoteJid, item);
+                if (chessResult.buttons?.length) await sendInteractive(rb, n.remoteJid, chessResult.text || "", chessResult.buttons);
+              }
+            } else if (chessResult?.buttons?.length) {
+              await sendInteractive(rb, n.remoteJid, chessResult.text || "", chessResult.buttons);
+            } else if (chessResult?.text) {
+              await sendInternal(rb, n.remoteJid, chessResult.text);
+            }
+            return;
+          }
+          if (ires.media) {
+            const mediaBatch = Array.isArray(ires.media) ? ires.media : [ires.media];
+            for (const item of mediaBatch) await sendMedia(rb, n.remoteJid, item);
+          }
+          if (ires.buttons?.length) {
+            await sendInteractive(rb, n.remoteJid, ires.text || "", ires.buttons);
+          } else if (ires.text) {
+            await sendInternal(rb, n.remoteJid, ires.text);
+          }
+          return;
+        }
+      } catch (err: any) {
+        console.error("[INTERACTIVE]", err?.message || err);
+      }
+    }
   }
 
   // group security engine (real delete + warn)

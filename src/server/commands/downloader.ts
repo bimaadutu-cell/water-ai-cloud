@@ -23,6 +23,13 @@ import {
   sanitizeFilename,
   validateExternalUrl,
 } from "./core";
+import {
+  createMusicSession,
+  addToQueue,
+  buildPlayerCaption,
+  playerButtons,
+  getMusicSession,
+} from "../interactive/music";
 
 const pExecFile = promisify(execFile);
 const FF = ffmpegPath();
@@ -1080,4 +1087,106 @@ export async function playV35(ctx: CmdCtx): Promise<CmdResult> {
     `• Opsional: set COBALT_API_URL atau YTDLP_COOKIES di server\n` +
     (errors.length ? `Detail: ${errors.join(" | ").slice(0, 220)}` : "")
   );
+}
+
+export async function play2(ctx: CmdCtx): Promise<CmdResult> {
+  const arg = ctx.arg.trim();
+  if (!arg) {
+    return {
+      text:
+        `🎵 *PLAY2 — Interactive Music Player*\n\n` +
+        `Pakai: ${ctx.bot.prefix}play2 <judul lagu>\n` +
+        `Contoh: ${ctx.bot.prefix}play2 montagem\n\n` +
+        `Setelah lagu diputar, gunakan tombol:\n` +
+        `▶️/⏸️  ⏮️  ⏭️  ⏹️  📃 Queue`,
+    };
+  }
+
+  // Re-use the solid playV35 download pipeline
+  const audioResult = await playV35(ctx);
+  if (!audioResult.media) {
+    return audioResult;
+  }
+
+  const mediaItem = Array.isArray(audioResult.media) ? audioResult.media[0] : audioResult.media;
+  if (!mediaItem || mediaItem.kind !== "audio") {
+    return audioResult;
+  }
+
+  const titleMatch = (audioResult.text || mediaItem.caption || arg).match(/\*(.+?)\*/);
+  const title = titleMatch ? titleMatch[1] : arg.slice(0, 60);
+  const track = {
+    title,
+    artist: "Unknown",
+    duration: 0,
+    audioBuffer: mediaItem.buffer,
+    mimetype: mediaItem.mimetype || "audio/mpeg",
+    filename: mediaItem.filename || "track.mp3",
+    engine: "play2",
+  };
+
+  // Generate neon player card (visual closer to the screenshot)
+  let cardBuf: Buffer | null = null;
+  try {
+    const { renderPlayerCard } = await import("../interactive/render/playerCard");
+    cardBuf = await renderPlayerCard({
+      title: track.title,
+      artist: track.artist,
+      positionSec: 0,
+      durationSec: track.duration || 0,
+      status: "playing",
+    });
+  } catch (e) {
+    console.error("[PLAY2] player card render failed", e);
+  }
+
+  const existing = getMusicSession(ctx.bot.id, ctx.n.remoteJid);
+  if (existing) {
+    addToQueue(ctx.bot.id, ctx.n.remoteJid, track);
+    const s = getMusicSession(ctx.bot.id, ctx.n.remoteJid)!;
+    const media: any[] = [];
+    if (cardBuf) {
+      media.push({
+        kind: "image" as const,
+        buffer: cardBuf,
+        mimetype: "image/png",
+        caption: `➕ Ditambahkan ke antrean\n\n${buildPlayerCaption(s)}`,
+      });
+    }
+    media.push({
+      kind: "audio" as const,
+      buffer: track.audioBuffer!,
+      mimetype: track.mimetype,
+      filename: track.filename,
+      ptt: false,
+    });
+    return {
+      text: cardBuf ? undefined : `➕ Ditambahkan ke antrean.\n\n${buildPlayerCaption(s)}`,
+      buttons: playerButtons(s),
+      media,
+    };
+  }
+
+  const session = createMusicSession(ctx.bot.id, ctx.n.remoteJid, track);
+  const media: any[] = [];
+  if (cardBuf) {
+    media.push({
+      kind: "image" as const,
+      buffer: cardBuf,
+      mimetype: "image/png",
+      caption: buildPlayerCaption(session),
+    });
+  }
+  media.push({
+    kind: "audio" as const,
+    buffer: track.audioBuffer!,
+    mimetype: track.mimetype,
+    filename: track.filename,
+    ptt: false,
+  });
+  return {
+    text: cardBuf ? undefined : buildPlayerCaption(session) + "\n\nGunakan tombol di bawah untuk kontrol.",
+    buttons: playerButtons(session),
+    media,
+  };
 }

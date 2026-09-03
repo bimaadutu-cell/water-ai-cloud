@@ -153,6 +153,7 @@ const H: Record<string, Handler> = {
 
   /* 📥 DOWNLOADER */
   play: dl.play,
+  play2: dl.play2,
   tourl: media.tourl,
   allvid: dl.allvid,
   song: dl.song,
