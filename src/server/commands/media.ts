@@ -124,14 +124,34 @@ function wrapBratText(value: string, maxGraphemes = 15): string[] {
 }
 
 function bratSvg(text: string, frame = 0): Buffer {
+  // Classic BRAT look: pure white bg, thick upright black text, emoji preserved
   const clean = text.trim().slice(0, 220) || "BRAT";
-  const lines = wrapBratText(clean, 14);
+  // Keep original casing for emoji-heavy lines; only upper non-emoji if all-ascii short
+  const hasEmoji = /\p{Extended_Pictographic}/u.test(clean);
+  const display = hasEmoji ? clean : clean; // keep as typed (user photos show mixed case)
+  const lines = wrapBratText(display, 12);
   const longest = Math.max(1, ...lines.map((line) => graphemes(line).length));
-  const fontSize = Math.max(44, Math.min(74, Math.floor(520 / (longest + 2))));
-  const gap = lines.length > 1 ? Math.min(78, Math.floor(340 / lines.length)) : 0;
-  const startY = 240 - ((lines.length - 1) * gap) / 2 + fontSize * 0.35 + (frame % 2);
-  const linesSvg = lines.map((line, i) => `<text x="240" y="${(startY + i * gap).toFixed(1)}" font-size="${fontSize}" text-anchor="middle">${svgEscape(line.toUpperCase())}</text>`).join("");
-  return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="480" height="480" viewBox="0 0 480 480"><rect width="480" height="480" fill="#ffffff"/><style>text{font-family:"Noto Sans","Noto Color Emoji","DejaVu Sans",sans-serif;font-weight:900;fill:#111111;stroke:#111111;stroke-width:0;letter-spacing:0px}</style>${linesSvg}</svg>`);
+  const fontSize = Math.max(48, Math.min(82, Math.floor(480 / (longest + 1.5))));
+  const gap = lines.length > 1 ? Math.min(88, Math.floor(360 / lines.length)) : 0;
+  const startY = 240 - ((lines.length - 1) * gap) / 2 + fontSize * 0.32;
+  // Double-pass text for extra thickness (no italic, no slant)
+  const linesSvg = lines
+    .map((line, i) => {
+      const y = (startY + i * gap).toFixed(1);
+      const safe = svgEscape(line);
+      // outline pass + fill pass = thicker readable text
+      return (
+        `<text x="240" y="${y}" font-size="${fontSize}" text-anchor="middle" fill="none" stroke="#111111" stroke-width="${Math.max(3, Math.floor(fontSize / 14))}" stroke-linejoin="round">${safe}</text>` +
+        `<text x="240" y="${y}" font-size="${fontSize}" text-anchor="middle" fill="#111111">${safe}</text>`
+      );
+    })
+    .join("");
+  return Buffer.from(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="480" viewBox="0 0 480 480">` +
+      `<rect width="480" height="480" fill="#ffffff"/>` +
+      `<style>text{font-family:"DejaVu Sans","Noto Sans","Liberation Sans",Arial,"Noto Color Emoji","Segoe UI Emoji","Apple Color Emoji",sans-serif;font-weight:900;font-style:normal;letter-spacing:0.5px}</style>` +
+      `${linesSvg}</svg>`
+  );
 }
 
 /** BRAT is intentionally a deterministic local text sticker; it never calls an AI service. */
@@ -183,28 +203,125 @@ function memeLines(value: string, max = 22): string[] {
   }).slice(0, 4);
 }
 
-/** Reply an image and use `atas|bawah` (or one text for bottom) to make a meme sticker. */
+/** Build thick upright meme text SVG (no italic / no slant). */
+function buildMemeTextSvg(width: number, height: number, top: string, bottom: string): Buffer {
+  const topLines = memeLines(top);
+  const bottomLines = memeLines(bottom);
+  const fontSize = Math.max(36, Math.min(72, Math.floor(width / 10)));
+  const strokeW = Math.max(4, Math.floor(fontSize / 8));
+  const lineGap = Math.max(40, Math.floor(fontSize * 1.15));
+  const style =
+    `text{font-family:Impact,"DejaVu Sans","Noto Sans",Arial,sans-serif;font-weight:900;font-style:normal;` +
+    `font-size:${fontSize}px;fill:#ffffff;stroke:#000000;stroke-width:${strokeW}px;` +
+    `paint-order:stroke fill;letter-spacing:1.5px}`;
+  const topSvg = topLines
+    .map(
+      (line, i) =>
+        `<text x="50%" y="${45 + i * lineGap}" text-anchor="middle" dominant-baseline="hanging">${svgEscape(line.toUpperCase())}</text>`
+    )
+    .join("");
+  const bottomSvg = bottomLines
+    .map(
+      (line, i) =>
+        `<text x="50%" y="${height - 28 - (bottomLines.length - 1 - i) * lineGap}" text-anchor="middle">${svgEscape(line.toUpperCase())}</text>`
+    )
+    .join("");
+  return Buffer.from(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><style>${style}</style>${topSvg}${bottomSvg}</svg>`
+  );
+}
+
+/**
+ * .smeme — meme text on image OR short video (max 8 seconds).
+ * Reply foto/video lalu: .smeme teks atas|teks bawah
+ */
 export async function smeme(ctx: CmdCtx): Promise<CmdResult> {
   const src = await getMediaSource(ctx);
-  if (!src.mimetype.startsWith("image/")) throw new CmdError("⚠️ .smeme hanya menerima reply foto/gambar.");
-  if (!ctx.arg.trim()) return { text: `Pakai: ${ctx.bot.prefix}smeme teks atas|teks bawah\nContoh: ${ctx.bot.prefix}smeme ADUHH|MALU AKU` };
+  const isImage = src.mimetype.startsWith("image/");
+  const isVideo = src.mimetype.startsWith("video/") || src.mimetype === "image/gif";
+  if (!isImage && !isVideo) {
+    throw new CmdError("⚠️ .smeme hanya menerima reply foto/gambar atau video (maks 8 detik).");
+  }
+  if (!ctx.arg.trim()) {
+    return {
+      text:
+        `Pakai: reply media lalu\n` +
+        `${ctx.bot.prefix}smeme teks atas|teks bawah\n` +
+        `Contoh: ${ctx.bot.prefix}smeme ADUHH|MALU AKU\n` +
+        `Support: foto & video maksimal 8 detik.`,
+    };
+  }
   const parts = ctx.arg.split(/\s*[|;]\s*/);
   const top = parts.length > 1 ? parts[0] : "";
   const bottom = parts.length > 1 ? parts.slice(1).join(" ") : parts[0];
-  const input = await sharp(src.buffer).rotate().jpeg({ quality: 92 }).toBuffer();
-  const meta = await sharp(input).metadata();
-  const width = Math.max(320, Math.min(960, meta.width ?? 640));
-  const height = Math.max(320, Math.min(960, meta.height ?? 640));
-  const topLines = memeLines(top);
-  const bottomLines = memeLines(bottom);
-  const textSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
-    <style>text{font-family:Impact,Arial,sans-serif;font-weight:900;font-size:${Math.max(28, Math.floor(width / 12))}px;fill:#fff;stroke:#000;stroke-width:${Math.max(2, Math.floor(width / 180))}px;paint-order:stroke;letter-spacing:1px}</style>
-    ${topLines.map((line, i) => `<text x="50%" y="${50 + i * Math.max(34, Math.floor(width / 11))}" text-anchor="middle">${svgEscape(line.toUpperCase())}</text>`).join("")}
-    ${bottomLines.map((line, i) => `<text x="50%" y="${height - 35 - (bottomLines.length - 1 - i) * Math.max(34, Math.floor(width / 11))}" text-anchor="middle">${svgEscape(line.toUpperCase())}</text>`).join("")}
-  </svg>`;
-  const rendered = await sharp(input).composite([{ input: Buffer.from(textSvg), top: 0, left: 0 }]).png().toBuffer();
-  const webp = await makeSticker(rendered, ctx);
-  return { media: { kind: "sticker", buffer: webp, mimetype: "image/webp" } };
+
+  // ---- IMAGE PATH ----
+  if (isImage) {
+    const input = await sharp(src.buffer).rotate().jpeg({ quality: 92 }).toBuffer();
+    const meta = await sharp(input).metadata();
+    const width = Math.max(320, Math.min(960, meta.width ?? 640));
+    const height = Math.max(320, Math.min(960, meta.height ?? 640));
+    const textSvg = buildMemeTextSvg(width, height, top, bottom);
+    const rendered = await sharp(input)
+      .resize(width, height, { fit: "fill" })
+      .composite([{ input: textSvg, top: 0, left: 0 }])
+      .png()
+      .toBuffer();
+    const webp = await makeSticker(rendered, ctx);
+    return { media: { kind: "sticker", buffer: webp, mimetype: "image/webp" } };
+  }
+
+  // ---- VIDEO PATH (max 8 seconds) ----
+  const key = await progress(ctx.sock, ctx.n.remoteJid, null, "⌛ Membuat smeme video (maks 8s)...");
+  try {
+    const outPath = await withTempFile(src.buffer, extOf(src.mimetype) || ".mp4", async (inPath) => {
+      // Text overlay at 720 square for clear thick meme text
+      const vw = 720;
+      const vh = 720;
+      const textPng = await sharp(buildMemeTextSvg(vw, vh, top, bottom)).png().toBuffer();
+      const overlayPath = inPath + ".overlay.png";
+      fs.writeFileSync(overlayPath, textPng);
+      const outVideo = inPath + ".smeme.mp4";
+
+      // Max 8 seconds, scale+pad, overlay thick text, no audio
+      await ffmpeg(
+        [
+          "-i", inPath,
+          "-i", overlayPath,
+          "-t", "8",
+          "-filter_complex",
+          `[0:v]scale=${vw}:${vh}:force_original_aspect_ratio=decrease,pad=${vw}:${vh}:(ow-iw)/2:(oh-ih)/2:black,setsar=1[base];` +
+            `[base][1:v]overlay=0:0:format=auto`,
+          "-c:v", "libx264",
+          "-preset", "veryfast",
+          "-crf", "26",
+          "-pix_fmt", "yuv420p",
+          "-an",
+          "-movflags", "+faststart",
+          outVideo,
+        ],
+        120000
+      );
+      try { fs.rmSync(overlayPath, { force: true }); } catch { /* ignore */ }
+      return outVideo;
+    });
+
+    const buf = fs.readFileSync(outPath);
+    fs.rmSync(outPath, { force: true });
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "✅ Smeme video siap.");
+    return {
+      media: {
+        kind: "video" as const,
+        buffer: buf,
+        mimetype: "video/mp4",
+        filename: "smeme.mp4",
+        caption: "SMEME · maks 8 detik",
+      },
+    };
+  } catch (error: any) {
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🥀 Smeme video gagal.");
+    throw new CmdError(`🥀 Gagal smeme video: ${String(error?.message || error).slice(0, 180)}`);
+  }
 }
 
 /** Re-send a quoted view-once image/video/audio as a normal WhatsApp media message. */

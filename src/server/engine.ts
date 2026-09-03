@@ -876,7 +876,12 @@ async function handleIncoming(rb: RunningBot, bot: BotRow, m: any) {
             const { chess2 } = await import("./commands/info");
             const fakeCtx = makeCmdCtx(rb, bot, m, n, t0, null);
             (fakeCtx as any).arg = String(chessArg);
-            const chessResult = await chess2(fakeCtx as any).catch((e: any) => ({ text: String(e?.message || e) }));
+            let chessResult: any;
+            try {
+              chessResult = await chess2(fakeCtx as any);
+            } catch (e: any) {
+              chessResult = { text: String(e?.message || e) };
+            }
             if (chessResult?.media) {
               const mediaBatch = Array.isArray(chessResult.media) ? chessResult.media : [chessResult.media];
               if (chessResult.buttons?.length && mediaBatch.length === 1 && mediaBatch[0].kind === "image") {
