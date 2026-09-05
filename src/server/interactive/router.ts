@@ -115,14 +115,14 @@ export async function handleInteractiveResponse(ctx: InteractiveContext): Promis
 
   touchSession(botId, jid, session.type);
 
-  // Exact handler first
+  // Exact handler first, then longest prefix match (avoid short placeholders swallowing events)
   let handler = handlers.get(actionId);
   if (!handler) {
-    // prefix match
+    let best = "";
     for (const [prefix, h] of handlers) {
-      if (actionId.startsWith(prefix)) {
+      if (actionId.startsWith(prefix) && prefix.length > best.length) {
+        best = prefix;
         handler = h;
-        break;
       }
     }
   }
@@ -143,6 +143,4 @@ export async function handleInteractiveResponse(ctx: InteractiveContext): Promis
   }
 }
 
-// Pre-register common music ids so router finds them via prefix
-registerInteractiveHandler("WATER_PLAY_", async () => null); // placeholder, real handlers in music module
-registerInteractiveHandler("CHESS_", async () => null);
+// Real handlers registered from music.ts / chess.ts modules (imported by index).

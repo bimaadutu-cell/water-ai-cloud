@@ -74,9 +74,11 @@ async function handleSelectFromStart(ctx: InteractiveContext, session: Interacti
 }
 
 async function handleFromSquare(ctx: InteractiveContext, session: InteractiveSession) {
-  const sq = ctx.actionId.includes(":") ? ctx.actionId.split(":")[1] : "";
-  if (!sq) return { text: "Kotak tidak valid." };
-  // Re-route as chess2 single-square select
+  let sq = "";
+  if (ctx.actionId.startsWith("CHESS_FROM_")) sq = ctx.actionId.slice("CHESS_FROM_".length);
+  else if (ctx.actionId.includes(":")) sq = ctx.actionId.split(":")[1];
+  sq = (sq || "").toLowerCase().replace(/[^a-h1-8]/g, "");
+  if (!/^[a-h][1-8]$/.test(sq)) return { text: "Kotak tidak valid." };
   return {
     text: `Memilih ${sq}...`,
     // @ts-ignore
@@ -85,12 +87,16 @@ async function handleFromSquare(ctx: InteractiveContext, session: InteractiveSes
 }
 
 async function handleToMove(ctx: InteractiveContext, session: InteractiveSession) {
-  const move = ctx.actionId.includes(":") ? ctx.actionId.split(":")[1] : "";
-  if (!move) return { text: "Gerak tidak valid." };
+  // Supports CHESS_TO_e4 and CHESS_TO:e4
+  let dest = "";
+  if (ctx.actionId.startsWith("CHESS_TO_")) dest = ctx.actionId.slice("CHESS_TO_".length);
+  else if (ctx.actionId.includes(":")) dest = ctx.actionId.split(":")[1];
+  dest = (dest || "").toLowerCase().replace(/[^a-h1-8]/g, "");
+  if (!/^[a-h][1-8]$/.test(dest)) return { text: "Gerak tidak valid." };
   return {
-    text: `♟️ Mencoba gerak *${move}*...`,
-    // @ts-ignore
-    _chessCmd: move,
+    text: `♟️ Mencoba ke *${dest}*...`,
+    // @ts-ignore — engine re-routes to chess2 with destination square
+    _chessCmd: dest,
   };
 }
 
@@ -100,4 +106,6 @@ registerExactHandler(CHESS_IDS.reset, handleChessNew);
 registerExactHandler("CHESS_UNDO", handleChessUndo);
 registerExactHandler("CHESS_SELECT_FROM_START", handleSelectFromStart);
 registerExactHandler("CHESS_FROM:", handleFromSquare);
+registerExactHandler("CHESS_FROM_", handleFromSquare);
 registerExactHandler("CHESS_TO:", handleToMove);
+registerExactHandler("CHESS_TO_", handleToMove);

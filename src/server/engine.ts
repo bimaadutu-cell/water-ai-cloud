@@ -896,6 +896,14 @@ async function handleIncoming(rb: RunningBot, bot: BotRow, m: any) {
                 for (const item of mediaBatch) await sendMedia(rb, n.remoteJid, item);
                 if (chessResult.buttons?.length) await sendInteractive(rb, n.remoteJid, chessResult.text || "", chessResult.buttons);
               }
+              if (chessResult?.list?.sections?.length) {
+                await sendListMessage(rb, n.remoteJid, chessResult.text || "Pilih kotak tujuan", chessResult.list);
+              }
+            } else if (chessResult?.list?.sections?.length) {
+              await sendListMessage(rb, n.remoteJid, chessResult.text || "Pilih kotak", chessResult.list);
+              if (chessResult.buttons?.length) {
+                await sendInteractive(rb, n.remoteJid, "Aksi cepat", chessResult.buttons);
+              }
             } else if (chessResult?.buttons?.length) {
               await sendInteractive(rb, n.remoteJid, chessResult.text || "", chessResult.buttons);
             } else if (chessResult?.text) {
@@ -1035,7 +1043,10 @@ async function handleIncoming(rb: RunningBot, bot: BotRow, m: any) {
             } else {
               for (const item of mediaBatch) await sendMedia(rb, n.remoteJid, item);
               if (result.buttons?.length) {
-                await sendInteractive(rb, n.remoteJid, result.text || "Pilih menu cepat 👇", result.buttons);
+                if ((result as any).list?.sections?.length) {
+                await sendListMessage(rb, n.remoteJid, result.text || "Pilih opsi", (result as any).list);
+              }
+              await sendInteractive(rb, n.remoteJid, result.text || "Pilih menu cepat 👇", result.buttons);
               }
             }
           } else if (result.buttons?.length) {
@@ -1187,6 +1198,60 @@ async function handleIncoming(rb: RunningBot, bot: BotRow, m: any) {
       await addLog({ userId: bot.userId, botId: bot.id, level: "info", event: "automation.ai_reply", message: "AI reply dikirim" });
     }
   }
+}
+
+
+/** Native WhatsApp LIST — user taps a row (best UX for chess squares). */
+async function sendListMessage(
+  rb: RunningBot,
+  to: string,
+  body: string,
+  list: {
+    title?: string;
+    buttonText?: string;
+    footer?: string;
+    sections: { title: string; rows: { id: string; title: string; description?: string }[] }[];
+  }
+) {
+  const footer = list.footer || "WATER AI CLOUD V3.5 · CHESS";
+  const sections = (list.sections || []).slice(0, 5).map((sec) => ({
+    title: (sec.title || "Pilih").slice(0, 24),
+    rows: (sec.rows || []).slice(0, 10).map((r) => ({
+      rowId: r.id,
+      title: r.title.slice(0, 24),
+      description: (r.description || "").slice(0, 72),
+    })),
+  }));
+  const attempts: any[] = [
+    {
+      text: body,
+      footer,
+      title: (list.title || "♟️ CHESS").slice(0, 60),
+      buttonText: (list.buttonText || "Pilih Kotak").slice(0, 20),
+      sections,
+    },
+    {
+      listMessage: {
+        title: (list.title || "♟️ CHESS").slice(0, 60),
+        description: body,
+        buttonText: (list.buttonText || "Pilih Kotak").slice(0, 20),
+        footerText: footer,
+        sections,
+      },
+    },
+  ];
+  for (const payload of attempts) {
+    try {
+      await rb.sock.sendMessage(to, payload);
+      await recordOut(rb, to, "list", body);
+      return;
+    } catch {
+      /* try next */
+    }
+  }
+  // fallback plain text of options
+  const flat = sections.flatMap((s) => s.rows.map((r) => `• ${r.title} (${r.rowId})`)).slice(0, 12);
+  await sendInternal(rb, to, `${body}\n\n${flat.join("\n")}`);
 }
 
 async function sendInteractive(

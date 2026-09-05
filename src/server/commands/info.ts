@@ -916,9 +916,31 @@ export async function chess2(ctx: CmdCtx): Promise<CmdResult> {
       "Pilih bidak putih terlebih dahulu.",
       "Giliran kamu"
     );
+    // Starting squares that usually have moves (pawns + knights) — tappable list
+    const openers = ["e2", "d2", "c2", "b2", "a2", "f2", "g2", "h2", "b1", "g1"];
+    const startList = {
+      title: "♟️ CHESS2 · Pilih Bidak",
+      buttonText: "Pilih Kotak",
+      footer: "WATER AI · LIVE CHESS",
+      sections: [
+        {
+          title: "Bidak putih",
+          rows: openers.map((sq) => ({
+            id: `CHESS_FROM_${sq}`,
+            title: sq.toUpperCase(),
+            description: `Pilih kotak ${sq.toUpperCase()}`,
+          })),
+        },
+      ],
+    };
     if (img) {
       return {
+        text:
+          "♟️ *CHESS2* — VS BOT · FUN MODE\n" +
+          "Giliran kamu — Putih\n\n" +
+          "Tekan *Pilih Kotak* lalu pilih bidak, atau ketik `.chess2 e2`",
         buttons: CHESS_BTNS,
+        list: startList,
         media: {
           kind: "image" as const,
           buffer: img,
@@ -926,11 +948,15 @@ export async function chess2(ctx: CmdCtx): Promise<CmdResult> {
           caption:
             "♟️ *CHESS2* — VS BOT · FUN MODE\n" +
             "Giliran kamu — Putih\n\n" +
-            "Ketuk tombol atau ketik: `.chess2 e2` lalu `.chess2 e4`",
+            "Tekan *Pilih Kotak* 👇 (seperti di video)",
         },
       };
     }
-    return { text: chessRender(board, "w"), buttons: CHESS_BTNS };
+    return {
+      text: chessRender(board, "w"),
+      buttons: CHESS_BTNS,
+      list: startList,
+    };
   }
 
   // ---- RESIGN / CANCEL ----
@@ -1068,9 +1094,34 @@ export async function chess2(ctx: CmdCtx): Promise<CmdResult> {
       targets.length ? `${targets.length} langkah tersedia.` : "Tidak ada langkah legal.",
       "Giliran kamu"
     );
+    const targetList =
+      targets.length > 0
+        ? {
+            title: `♟️ Dari ${sq.toUpperCase()}`,
+            buttonText: "Pilih Tujuan",
+            footer: "WATER AI · CHESS LIVE",
+            sections: [
+              {
+                title: `${targets.length} langkah legal`,
+                rows: targets.slice(0, 10).map((t) => ({
+                  id: `CHESS_TO_${t}`,
+                  title: t.toUpperCase(),
+                  description: `Gerakkan ${sq.toUpperCase()} → ${t.toUpperCase()}`,
+                })),
+              },
+            ],
+          }
+        : undefined;
+
     if (img) {
       return {
+        text:
+          `Kotak *${sq}* dipilih\n` +
+          (targets.length
+            ? `${targets.length} langkah tersedia.\nTekan *Pilih Tujuan* di bawah.`
+            : "Tidak ada langkah tersedia."),
         buttons: CHESS_BTNS,
+        list: targetList,
         media: {
           kind: "image" as const,
           buffer: img,
@@ -1078,7 +1129,7 @@ export async function chess2(ctx: CmdCtx): Promise<CmdResult> {
           caption:
             `Kotak *${sq}* dipilih\n` +
             (targets.length
-              ? `${targets.length} langkah tersedia.\nPilih kotak tujuan (contoh: \`.chess2 ${targets[0]}\`)`
+              ? `${targets.length} langkah tersedia.\nTekan *Pilih Tujuan* 👇`
               : "Tidak ada langkah tersedia."),
         },
       };
@@ -1086,6 +1137,7 @@ export async function chess2(ctx: CmdCtx): Promise<CmdResult> {
     return {
       text: `Kotak ${sq} dipilih · ${targets.length} langkah tersedia`,
       buttons: CHESS_BTNS,
+      list: targetList,
     };
   }
 

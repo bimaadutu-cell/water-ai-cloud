@@ -51,9 +51,21 @@ export interface CmdMedia {
   jpegThumbnail?: Buffer;
 }
 
+export interface CmdListSection {
+  title: string;
+  rows: { id: string; title: string; description?: string }[];
+}
+
 export interface CmdResult {
   text?: string;
   buttons?: { id: string; text: string }[];
+  /** Native WhatsApp list (tap rows) — preferred for chess square picks. */
+  list?: {
+    title?: string;
+    buttonText?: string;
+    footer?: string;
+    sections: CmdListSection[];
+  };
   /** A single media item or a bounded batch for public carousels. */
   media?: CmdMedia | CmdMedia[];
 }
