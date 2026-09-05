@@ -2,12 +2,23 @@
  * translate uses MyMemory (free, no key). Search uses public keyless APIs. */
 import { CmdCtx, CmdResult, box, truncate, CmdError } from "./core";
 
+/** Normalize OpenAI-compatible base URL (strip trailing slash & accidental /chat/completions). */
+function normalizeAiBase(raw: string): string {
+  let u = (raw || "").trim().replace(/\/+$/, "");
+  // User often pastes full endpoint by mistake
+  u = u.replace(/\/chat\/completions$/i, "");
+  u = u.replace(/\/v1beta$/i, "/v1beta/openai"); // Gemini native root → openai compat path
+  // Fix double openai path
+  u = u.replace(/\/openai\/openai$/i, "/openai");
+  return u.replace(/\/+$/, "");
+}
+
 async function aiChat(
   system: string,
   user: string,
   opts: { temperature?: number; maxTokens?: number; imageBase64?: string; imageMime?: string; botSettings?: any } = {}
 ): Promise<string> {
-  // Priority: bot settings (dashboard) > env — support Gemini (AIza), OpenAI (sk-), Groq/custom (gsk_/AQ/...)
+  // Priority: bot settings (dashboard) > env — Gemini / OpenAI / Groq / custom proxy
   const bs = opts.botSettings || {};
   const key = (bs.geminiApiKey || bs.aiApiKey || process.env.GEMINI_API_KEY || process.env.AI_API_KEY || "").trim();
   if (!key)
@@ -16,14 +27,22 @@ async function aiChat(
   const keyLower = key.toLowerCase();
   const isGeminiKey = key.startsWith("AIza") || keyLower.includes("gemini");
   const isGroq = key.startsWith("gsk_") || keyLower.startsWith("gsk");
-  const configuredBase = (bs.aiBaseUrl || process.env.AI_BASE_URL || process.env.GEMINI_API_BASE || "").trim().replace(/\/$/, "");
+  const configuredBase = normalizeAiBase(bs.aiBaseUrl || process.env.AI_BASE_URL || process.env.GEMINI_API_BASE || "");
 
-  let base = configuredBase;
-  if (!base) {
-    if (isGeminiKey) base = "https://generativelanguage.googleapis.com/v1beta/openai";
-    else if (isGroq) base = "https://api.groq.com/openai/v1";
-    else base = "https://api.openai.com/v1"; // OpenAI-compatible (termasuk key AQ dari proxy)
+  const defaultBases: string[] = [];
+  if (configuredBase) defaultBases.push(configuredBase);
+  if (isGeminiKey) {
+    defaultBases.push(
+      "https://generativelanguage.googleapis.com/v1beta/openai",
+      "https://generativelanguage.googleapis.com/v1beta"
+    );
+  } else if (isGroq) {
+    defaultBases.push("https://api.groq.com/openai/v1");
+  } else {
+    defaultBases.push("https://api.openai.com/v1");
   }
+  // unique preserve order
+  const bases = [...new Set(defaultBases.map(normalizeAiBase).filter(Boolean))];
 
   const model =
     (bs.aiModel || process.env.AI_MODEL || process.env.GEMINI_MODEL || "").trim() ||
@@ -42,28 +61,87 @@ async function aiChat(
     messages.push({ role: "user", content: user });
   }
 
-  const res = await fetch(`${base}/chat/completions`, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
-    body: JSON.stringify({
-      model,
-      temperature: opts.temperature ?? 0.7,
-      max_tokens: opts.maxTokens ?? Number(process.env.GEMINI_MAX_OUTPUT_TOKENS || 8192),
-      messages,
-    }),
-    signal: AbortSignal.timeout(Number(process.env.GEMINI_TIMEOUT_MS || 60000)),
-  });
-  if (!res.ok) {
-    const errBody = await res.text().catch(() => "");
-    const hint = res.status === 401 || res.status === 403
-      ? " Key ditolak — cek API key di dashboard & AI Base URL (jika pakai proxy)."
-      : res.status === 404
-        ? " Endpoint/model tidak ditemukan — set AI Base URL + AI Model di dashboard."
-        : "";
-    return `❌ Gagal mengakses service AI (HTTP ${res.status}).${hint}${errBody ? "\n" + errBody.slice(0, 180) : ""}`;
+  const timeoutMs = Number(process.env.GEMINI_TIMEOUT_MS || 60000);
+  const maxTokens = opts.maxTokens ?? Number(process.env.GEMINI_MAX_OUTPUT_TOKENS || 8192);
+  const temperature = opts.temperature ?? 0.7;
+
+  const errors: string[] = [];
+
+  for (const base of bases) {
+    // 1) OpenAI-compatible /chat/completions
+    try {
+      const url = `${base}/chat/completions`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${key}`,
+        },
+        body: JSON.stringify({ model, temperature, max_tokens: maxTokens, messages }),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (res.ok) {
+        const j: any = await res.json();
+        const content =
+          j?.choices?.[0]?.message?.content ||
+          j?.candidates?.[0]?.content?.parts?.[0]?.text ||
+          "";
+        if (content) return content;
+        errors.push(`${url}: empty response`);
+      } else {
+        const errBody = await res.text().catch(() => "");
+        errors.push(`${url} → HTTP ${res.status} ${errBody.slice(0, 100)}`);
+        // 401/403 on this base — try next base
+        if (res.status === 404 || res.status === 401 || res.status === 403) continue;
+      }
+    } catch (e: any) {
+      errors.push(`${base}/chat/completions: ${String(e?.message || e).slice(0, 80)}`);
+    }
+
+    // 2) Gemini native generateContent (if key looks like Gemini and base is google)
+    if (isGeminiKey && /generativelanguage\.googleapis\.com/i.test(base)) {
+      try {
+        const nativeModel = model.replace(/^models\//, "");
+        const url =
+          `https://generativelanguage.googleapis.com/v1beta/models/${nativeModel}:generateContent?key=${encodeURIComponent(key)}`;
+        const parts: any[] = [{ text: `${system}\n\n${user}` }];
+        if (opts.imageBase64) {
+          parts.push({
+            inline_data: {
+              mime_type: opts.imageMime ?? "image/png",
+              data: opts.imageBase64,
+            },
+          });
+        }
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ role: "user", parts }],
+            generationConfig: { temperature, maxOutputTokens: maxTokens },
+          }),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        if (res.ok) {
+          const j: any = await res.json();
+          const content = j?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).filter(Boolean).join("\n") || "";
+          if (content) return content;
+          errors.push(`native ${nativeModel}: empty`);
+        } else {
+          const errBody = await res.text().catch(() => "");
+          errors.push(`native → HTTP ${res.status} ${errBody.slice(0, 100)}`);
+        }
+      } catch (e: any) {
+        errors.push(`native: ${String(e?.message || e).slice(0, 80)}`);
+      }
+    }
   }
-  const j: any = await res.json();
-  return j?.choices?.[0]?.message?.content || j?.candidates?.[0]?.content?.parts?.[0]?.text || "AI tidak memberikan jawaban.";
+
+  const hint =
+    "\nTips: pastikan AI Base URL *tanpa* /chat/completions di akhir.\n" +
+    "Gemini: https://generativelanguage.googleapis.com/v1beta/openai\n" +
+    "Atau kosongkan Base URL agar auto.";
+  return `❌ Gagal mengakses service AI.\n${errors.slice(0, 3).join("\n")}${hint}`;
 }
 
 const WA_SYSTEM =

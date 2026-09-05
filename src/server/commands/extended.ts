@@ -345,3 +345,18 @@ export async function sandboxdeploy(ctx: CmdCtx): Promise<CmdResult> {
   }
 }
 
+
+
+/** .emojisl — intentionally does NOT spam 5k–10k reactions (WhatsApp ToS / abuse). */
+export async function emojisl(ctx: CmdCtx): Promise<CmdResult> {
+  return {
+    text:
+      "⚠️ Fitur mass-reaction (ribuan reaction ke status/pesan orang lain) *tidak tersedia*.\n\n" +
+      "Alasan:\n" +
+      "• Melanggar kebijakan WhatsApp\n" +
+      "• Bisa dianggap spam / pelecehan\n" +
+      "• Baileys tidak mendukung inflate reaction palsu ke target arbitrary secara massal\n\n" +
+      "Yang diizinkan: reaction terbatas pada pesan bot sendiri di chat ini (opsional).\n" +
+      "Contoh aman: reply pesan bot lalu ketik reaction manual di WhatsApp.",
+  };
+}

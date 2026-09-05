@@ -181,6 +181,7 @@ export const REGISTRY: RegistryCommand[] = [
   c("securitylog", "security", "Log keamanan grup"),
 
   /* 🎮 FUN — real games & free APIs */
+  c("emojisl", "fun", "Info kebijakan reaction (mass-reaction tidak didukung)"),
   c("chess2", "fun", "Main catur vs bot (fun mode): .chess2 / .chess2 e2e4"),
   c("quiz", "fun", "Kuis sains (OpenTDB)"),
   c("trivia", "fun", "Alias .quiz"),
@@ -241,7 +242,7 @@ export const REGISTRY: RegistryCommand[] = [
   c("addprem", "owner", "Tambah premium: .addprem @tag [1jam|2hari|forever] (default 1 jam)", "owner"),
   c("delprem", "owner", "Hapus premium: .delprem @tag", "owner"),
   c("listprem", "owner", "Daftar premium", "owner"),
-  c("ban", "owner", "Ban user: .ban @tag", "owner"),
+  c("ban", "group", "Ban user by phone number: .ban 628xxx [alasan]"),
   c("unban", "owner", "Unban user: .unban @tag", "owner"),
   c("restart", "owner", "Restart bot engine", "owner"),
   c("backup", "owner", "Export konfigurasi bot (file JSON)", "owner"),

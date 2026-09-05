@@ -48,6 +48,19 @@ export function Navbar() {
           <Link href="/login" className="btn btn-ghost !py-2">
             Login
           </Link>
+          <button
+            type="button"
+            className="theme-toggle-btn hidden sm:inline-flex"
+            onClick={() => {
+              const cur = document.body?.dataset.theme === "neon-white" ? "neon-white" : "neon-black";
+              const next = cur === "neon-black" ? "neon-white" : "neon-black";
+              document.body.dataset.theme = next;
+              document.documentElement.dataset.theme = next;
+              try { localStorage.setItem("wai-theme", next); } catch {}
+            }}
+          >
+            Neon Theme
+          </button>
           <Link href="/register" className="btn btn-primary !py-2">
             Get Started
           </Link>

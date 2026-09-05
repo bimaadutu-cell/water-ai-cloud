@@ -67,7 +67,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={`${inter.variable} ${space.variable}`}>
-      <body className="min-h-screen bg-ink-950 text-slate-200 relative overflow-x-hidden">
+      
+        <script dangerouslySetInnerHTML={{__html: `(function(){try{var t=localStorage.getItem('wai-theme');if(t==='neon-white'||t==='neon-black')document.documentElement.dataset.theme=t;document.body&&(document.body.dataset.theme=t||'neon-black');}catch(e){}})();`}} />
+<body data-theme="neon-black" className="neon-root" className="min-h-screen bg-ink-950 text-slate-200 relative overflow-x-hidden">
         {/* Animated background aurora and glowing lighting */}
         <div className="fixed inset-0 pointer-events-none z-0 overflow-hidden">
           <div className="anim-aurora bg-cyan-500/10 w-[500px] h-[500px] -top-32 -left-32 animate-[aurora-move_20s_ease-in-out_infinite]" />

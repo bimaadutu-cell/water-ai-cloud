@@ -491,22 +491,71 @@ export async function listprem(ctx: CmdCtx): Promise<CmdResult> {
   };
 }
 
-export async function ban(ctx: CmdCtx): Promise<CmdResult> {
+/** Resolve ban target: MUST use phone number (not @tag). Group or private. */
+function resolveBanJid(ctx: CmdCtx): { jid: string | null; error?: string } {
+  const arg = (ctx.arg || "").trim();
+  // Prefer explicit number in argument: .ban 62812... [alasan]
+  const numMatch = arg.match(/(?:\+?|0)?(\d{8,15})/);
+  if (numMatch) {
+    let digits = numMatch[1];
+    // normalize Indonesian 08... → 62...
+    if (digits.startsWith("0")) digits = "62" + digits.slice(1);
+    if (!digits.startsWith("62") && digits.length <= 12) {
+      // keep as-is for other countries if already full
+    }
+    const jid = digits.includes("@") ? digits : `${digits}@s.whatsapp.net`;
+    return { jid };
+  }
+  // In groups, still require number — do not accept @tag only
   const mentioned: string[] = ctx.raw?.message?.extendedTextMessage?.contextInfo?.mentionedJid ?? [];
-  const jid = mentioned[0] ?? null;
-  if (!jid) return { text: "Pakai: .ban @tag" };
-  const reason = ctx.arg.replace(jid.split("@")[0], "").trim().slice(0, 120) || "Diban owner";
+  if (mentioned.length) {
+    return {
+      jid: null,
+      error:
+        "⚠️ .ban *wajib nomor*, jangan hanya tag.\n" +
+        `Contoh: ${ctx.bot.prefix}ban 6281234567890 spam\n` +
+        `Di grup juga pakai nomor, bukan @tag.`,
+    };
+  }
+  return {
+    jid: null,
+    error: `Pakai: ${ctx.bot.prefix}ban <nomor> [alasan]\nContoh: ${ctx.bot.prefix}ban 6281234567890 spam`,
+  };
+}
+
+export async function ban(ctx: CmdCtx): Promise<CmdResult> {
+  const { jid, error } = resolveBanJid(ctx);
+  if (!jid) return { text: error || "Nomor tidak valid." };
+  const num = jid.split("@")[0];
+  const reason =
+    (ctx.arg || "")
+      .replace(/\+?\d{8,15}/, "")
+      .replace(num, "")
+      .trim()
+      .slice(0, 120) || "Diban owner";
   await db.insert(banlist).values({ botId: ctx.bot.id, jid, reason }).catch(() => {});
-  db.insert(logs).values({ botId: ctx.bot.id, userId: ctx.bot.userId, level: "warning", event: "security.ban", message: `@${jid.split("@")[0]} di-ban: ${reason}`, meta: { jid } }).catch(() => {});
-  return { text: `🔨 @${jid.split("@")[0]} di-BAN dari bot ini.` };
+  db.insert(logs)
+    .values({
+      botId: ctx.bot.id,
+      userId: ctx.bot.userId,
+      level: "warning",
+      event: "security.ban",
+      message: `${num} di-ban: ${reason}`,
+      meta: { jid },
+    })
+    .catch(() => {});
+  return { text: `🔨 *${num}* di-BAN dari bot ini.\nAlasan: ${reason}` };
 }
 
 export async function unban(ctx: CmdCtx): Promise<CmdResult> {
-  const mentioned: string[] = ctx.raw?.message?.extendedTextMessage?.contextInfo?.mentionedJid ?? [];
-  const jid = mentioned[0] ?? null;
-  if (!jid) return { text: "Pakai: .unban @tag" };
-  const rows = await db.delete(banlist).where(and(eq(banlist.botId, ctx.bot.id), eq(banlist.jid, jid))).returning();
-  return { text: rows.length ? `✅ @${jid.split("@")[0]} di-unban.` : "❌ User tidak di-ban." };
+  const { jid, error } = resolveBanJid(ctx);
+  if (!jid) return { text: (error || "").replace(/\.ban/g, ".unban") || "Nomor tidak valid." };
+  const num = jid.split("@")[0];
+  const rows = await db
+    .delete(banlist)
+    .where(and(eq(banlist.botId, ctx.bot.id), eq(banlist.jid, jid)))
+    .returning();
+  return { text: rows.length ? `✅ *${num}* di-unban.` : `❌ *${num}* tidak ada di banlist.` };
 }
 
 export async function backup(ctx: CmdCtx): Promise<CmdResult> {

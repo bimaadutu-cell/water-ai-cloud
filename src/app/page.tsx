@@ -140,9 +140,10 @@ export default async function LandingPage() {
             <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-cyan-400" />
             Cloud WhatsApp Bot Engine — online sekarang
           </div>
+          <p className="welcome-anim mb-3 text-sm uppercase tracking-[0.2em] text-cyan-300/90">Welcome</p>
           <h1 className="anim-fade-up font-display text-4xl font-bold leading-[1.08] tracking-tight text-white sm:text-5xl lg:text-[3.4rem]">
             Build Smarter WhatsApp Automation with{" "}
-            <span className="text-gradient">WATER AI CLOUD</span>
+            <span className="text-gradient welcome-anim">WATER AI CLOUD</span>
           </h1>
           <p className="anim-fade-up mt-5 max-w-xl text-base leading-relaxed text-slate-400 sm:text-lg" style={{ animationDelay: "0.1s" }}>
             Connect your WhatsApp, deploy your bot, automate conversations, and manage everything

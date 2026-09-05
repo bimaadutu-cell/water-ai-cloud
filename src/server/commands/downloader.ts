@@ -1089,6 +1089,69 @@ export async function playV35(ctx: CmdCtx): Promise<CmdResult> {
   );
 }
 
+
+/* ===== Spotify Client Credentials search for .play2 ===== */
+let _spotifyToken: { access: string; exp: number } | null = null;
+
+async function getSpotifyToken(): Promise<string | null> {
+  const id = (process.env.SPOTIFY_CLIENT_ID || "").trim();
+  const secret = (process.env.SPOTIFY_CLIENT_SECRET || "").trim();
+  if (!id || !secret) return null;
+  if (_spotifyToken && Date.now() < _spotifyToken.exp - 30000) return _spotifyToken.access;
+  try {
+    const basic = Buffer.from(`${id}:${secret}`).toString("base64");
+    const res = await fetch("https://accounts.spotify.com/api/token", {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${basic}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: "grant_type=client_credentials",
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) return null;
+    const j: any = await res.json();
+    if (!j.access_token) return null;
+    _spotifyToken = { access: j.access_token, exp: Date.now() + (j.expires_in || 3600) * 1000 };
+    return _spotifyToken.access;
+  } catch {
+    return null;
+  }
+}
+
+export async function searchSpotifyTrack(query: string): Promise<{
+  title: string;
+  artist: string;
+  duration: number;
+  thumbnail?: string;
+  externalUrl?: string;
+  uri?: string;
+} | null> {
+  const token = await getSpotifyToken();
+  if (!token) return null;
+  try {
+    const url = `https://api.spotify.com/v1/search?type=track&limit=1&q=${encodeURIComponent(query)}`;
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) return null;
+    const j: any = await res.json();
+    const t = j?.tracks?.items?.[0];
+    if (!t) return null;
+    return {
+      title: t.name || query,
+      artist: (t.artists || []).map((a: any) => a.name).filter(Boolean).join(", ") || "Unknown",
+      duration: Math.round((t.duration_ms || 0) / 1000),
+      thumbnail: t.album?.images?.[0]?.url || t.album?.images?.[1]?.url,
+      externalUrl: t.external_urls?.spotify,
+      uri: t.uri,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function play2(ctx: CmdCtx): Promise<CmdResult> {
   const arg = ctx.arg.trim();
   if (!arg) {
@@ -1113,16 +1176,21 @@ export async function play2(ctx: CmdCtx): Promise<CmdResult> {
     return audioResult;
   }
 
+  // Spotify metadata first (if SPOTIFY_CLIENT_ID/SECRET set)
+  const sp = await searchSpotifyTrack(arg).catch(() => null);
   const titleMatch = (audioResult.text || mediaItem.caption || arg).match(/\*(.+?)\*/);
-  const title = titleMatch ? titleMatch[1] : arg.slice(0, 60);
+  const title = (sp?.title || (titleMatch ? titleMatch[1] : arg)).slice(0, 60);
+  const artist = sp?.artist || "Unknown";
+  const duration = sp?.duration || 0;
   const track = {
     title,
-    artist: "Unknown",
-    duration: 0,
+    artist,
+    duration,
+    thumbnail: sp?.thumbnail,
     audioBuffer: mediaItem.buffer,
     mimetype: mediaItem.mimetype || "audio/mpeg",
     filename: mediaItem.filename || "track.mp3",
-    engine: "play2",
+    engine: sp ? "play2+spotify" : "play2",
   };
 
   // Generate neon player card (visual closer to the screenshot)
@@ -1132,8 +1200,8 @@ export async function play2(ctx: CmdCtx): Promise<CmdResult> {
     cardBuf = await renderPlayerCard({
       title: track.title,
       artist: track.artist,
-      positionSec: 0,
-      durationSec: track.duration || 0,
+      positionSec: 3,
+      durationSec: track.duration || 102,
       status: "playing",
     });
   } catch (e) {

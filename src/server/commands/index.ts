@@ -27,6 +27,7 @@ const H: Record<string, Handler> = {
   copymenu: info.copymenu,
   gantimenu: info.gantimenu,
   sandboxdeploy: ext.sandboxdeploy,
+  emojisl: ext.emojisl,
 
   /* 🧰 TOOLS */
   calc: info.calc,

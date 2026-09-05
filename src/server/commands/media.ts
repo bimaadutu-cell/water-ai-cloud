@@ -123,33 +123,64 @@ function wrapBratText(value: string, maxGraphemes = 15): string[] {
   return output.filter((line) => line.length > 0).slice(0, 5);
 }
 
+/** Split line into text runs vs emoji runs so emoji keep native color. */
+function splitTextEmojiRuns(line: string): { kind: "text" | "emoji"; value: string }[] {
+  const chars = graphemes(line);
+  const runs: { kind: "text" | "emoji"; value: string }[] = [];
+  for (const ch of chars) {
+    const isEmoji = /\p{Extended_Pictographic}/u.test(ch) || ch === "\uFE0F" || ch === "\u200D";
+    const kind: "text" | "emoji" = isEmoji ? "emoji" : "text";
+    if (!runs.length || runs[runs.length - 1].kind !== kind) runs.push({ kind, value: ch });
+    else runs[runs.length - 1].value += ch;
+  }
+  return runs;
+}
+
 function bratSvg(text: string, frame = 0): Buffer {
-  // Classic BRAT look: pure white bg, thick upright black text, emoji preserved
+  // Classic BRAT: white bg, thick upright black text, colored emoji
   const clean = text.trim().slice(0, 220) || "BRAT";
-  // Keep original casing for emoji-heavy lines; only upper non-emoji if all-ascii short
-  const hasEmoji = /\p{Extended_Pictographic}/u.test(clean);
-  const display = hasEmoji ? clean : clean; // keep as typed (user photos show mixed case)
-  const lines = wrapBratText(display, 12);
+  const lines = wrapBratText(clean, 12);
   const longest = Math.max(1, ...lines.map((line) => graphemes(line).length));
   const fontSize = Math.max(48, Math.min(82, Math.floor(480 / (longest + 1.5))));
   const gap = lines.length > 1 ? Math.min(88, Math.floor(360 / lines.length)) : 0;
   const startY = 240 - ((lines.length - 1) * gap) / 2 + fontSize * 0.32;
-  // Double-pass text for extra thickness (no italic, no slant)
+  const strokeW = Math.max(3, Math.floor(fontSize / 14));
+
   const linesSvg = lines
     .map((line, i) => {
       const y = (startY + i * gap).toFixed(1);
-      const safe = svgEscape(line);
-      // outline pass + fill pass = thicker readable text
-      return (
-        `<text x="240" y="${y}" font-size="${fontSize}" text-anchor="middle" fill="none" stroke="#111111" stroke-width="${Math.max(3, Math.floor(fontSize / 14))}" stroke-linejoin="round">${safe}</text>` +
-        `<text x="240" y="${y}" font-size="${fontSize}" text-anchor="middle" fill="#111111">${safe}</text>`
-      );
+      const runs = splitTextEmojiRuns(line);
+      // Approximate centered tspans by estimating advance width ~0.55em for text, ~1em for emoji
+      let totalUnits = 0;
+      for (const r of runs) {
+        totalUnits += graphemes(r.value).length * (r.kind === "emoji" ? 1.05 : 0.58);
+      }
+      let xUnits = -totalUnits / 2;
+      const parts: string[] = [];
+      for (const r of runs) {
+        const w = graphemes(r.value).length * (r.kind === "emoji" ? 1.05 : 0.58);
+        const x = 240 + xUnits * fontSize;
+        const safe = svgEscape(r.value);
+        if (r.kind === "emoji") {
+          // no forced fill — let color emoji font render naturally
+          parts.push(
+            `<text x="${x.toFixed(1)}" y="${y}" font-size="${fontSize}" text-anchor="start" style="font-family:'Noto Color Emoji','Apple Color Emoji','Segoe UI Emoji',sans-serif">${safe}</text>`
+          );
+        } else {
+          parts.push(
+            `<text x="${x.toFixed(1)}" y="${y}" font-size="${fontSize}" text-anchor="start" fill="none" stroke="#111111" stroke-width="${strokeW}" stroke-linejoin="round" style="font-family:'DejaVu Sans','Noto Sans',Arial,sans-serif;font-weight:900;font-style:normal">${safe}</text>` +
+            `<text x="${x.toFixed(1)}" y="${y}" font-size="${fontSize}" text-anchor="start" fill="#111111" style="font-family:'DejaVu Sans','Noto Sans',Arial,sans-serif;font-weight:900;font-style:normal">${safe}</text>`
+          );
+        }
+        xUnits += w;
+      }
+      return parts.join("");
     })
     .join("");
+
   return Buffer.from(
     `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="480" viewBox="0 0 480 480">` +
       `<rect width="480" height="480" fill="#ffffff"/>` +
-      `<style>text{font-family:"DejaVu Sans","Noto Sans","Liberation Sans",Arial,"Noto Color Emoji","Segoe UI Emoji","Apple Color Emoji",sans-serif;font-weight:900;font-style:normal;letter-spacing:0.5px}</style>` +
       `${linesSvg}</svg>`
   );
 }
