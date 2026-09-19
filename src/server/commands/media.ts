@@ -1,0 +1,973 @@
+/* STICKER + IMAGE + MEDIA converters — real processing (sharp + ffmpeg-static). */
+import fs from "fs";
+import path from "path";
+import sharp from "sharp";
+import { execFile } from "child_process";
+import { promisify } from "util";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import { CmdCtx, CmdResult, box, truncate, safeFetch, withTempFile, ffmpegPath, sanitizeFilename, CmdError, progress, MAX_FILE_BYTES } from "./core";
+
+const pExecFile = promisify(execFile);
+const FF = ffmpegPath();
+
+async function ffmpeg(args: string[], timeoutMs = 120000): Promise<void> {
+  if (!FF) throw new CmdError("❌ Media processor (ffmpeg) tidak tersedia di server ini.");
+  await pExecFile(FF, ["-hide_banner", "-loglevel", "error", "-y", ...args], { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 });
+}
+
+/* media source: URL arg OR replied message */
+export async function getMediaSource(ctx: CmdCtx): Promise<{ buffer: Buffer; mimetype: string; url?: string }> {
+  const arg = ctx.arg.trim();
+  if (/^https?:\/\//i.test(arg)) {
+    const buf = await safeFetch(arg);
+    const ft: any = await import("file-type");
+    const type = await ft.fileTypeFromBuffer(buf);
+    return { buffer: buf, mimetype: type?.mime ?? "application/octet-stream", url: arg };
+  }
+  const m = await ctx.getRepliedMedia();
+  if (!m) throw new CmdError("⚠️ Reply media (gambar/video/audio/sticker) atau kirim URL.");
+  return { buffer: m.buffer, mimetype: m.mimetype };
+}
+
+const extOf = (mime: string): string => {
+  const map: Record<string, string> = {
+    "image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif",
+    "video/mp4": ".mp4", "video/quicktime": ".mov", "video/webm": ".webm",
+    "audio/mpeg": ".mp3", "audio/mp4": ".m4a", "audio/ogg": ".ogg", "audio/wav": ".wav",
+  };
+  return map[mime] ?? ".bin";
+};
+
+/* -------------------------------- STICKERS ------------------------------ */
+async function makeSticker(buffer: Buffer, _ctx: CmdCtx): Promise<Buffer> {
+  // Keep the sticker path deterministic and native-light: no AI and no
+  // WhatsApp accepts a valid WebP sticker payload; animated stickers are
+  // produced separately by FFmpeg below.
+  return sharp(buffer)
+    .rotate()
+    .resize({ width: 512, height: 512, fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
+    .webp({ quality: 82, effort: 4 })
+    .toBuffer();
+}
+
+export async function sticker(ctx: CmdCtx): Promise<CmdResult> {
+  const src = await getMediaSource(ctx);
+  const isVideo = src.mimetype.startsWith("video") || src.mimetype === "image/gif";
+  if (isVideo) {
+    const out = await withTempFile(src.buffer, extOf(src.mimetype), async (inPath) => {
+      const outPath = inPath + ".webp";
+      await ffmpeg(["-i", inPath, "-vf", "scale=480:480:force_original_aspect_ratio=decrease,format=rgba,pad=480:480:(ow-iw)/2:(oh-ih)/2", "-lossless", "true", "-q:v", "70", "-vsync", "0", "-c:v", "libwebp", outPath]);
+      return outPath;
+    });
+    const buf = fs.readFileSync(out);
+    fs.rmSync(out, { force: true });
+    return { media: { kind: "sticker", buffer: buf, mimetype: "image/webp" } };
+  }
+  const webp = await makeSticker(src.buffer, ctx);
+  return { media: { kind: "sticker", buffer: webp, mimetype: "image/webp" } };
+}
+export const s = sticker;
+export const stiker = sticker;
+
+const EMOJIS = ["💧", "😂", "⚡", "🔥", "🥳", "🤖", "😎", "🚀", "💯", "🎉", "✨", "😍", "😈", "👑", "💙"];
+export async function textsticker(ctx: CmdCtx): Promise<CmdResult> {
+  const text = ctx.arg || "WATER AI";
+  const lines = text
+    .split(/\n/)
+    .flatMap((l) => l.match(/.{1,18}/g) ?? [l]);
+  const safe = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const svgLines = lines
+    .map((l, i) => `<text x="240" y="${150 + i * 90}" font-family="sans-serif" font-size="64" font-weight="bold" fill="#e0faff" text-anchor="middle">${safe(l)}</text>`)
+    .join("");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="480"><rect width="480" height="480" fill="#071018"/>${svgLines}<text x="240" y="455" font-size="22" fill="#22d3ee" text-anchor="middle" font-family="sans-serif">💧 WATER AI</text></svg>`;
+  const png = await sharp(Buffer.from(svg)).png().toBuffer();
+  const webp = await makeSticker(png, ctx);
+  return { media: { kind: "sticker", buffer: webp, mimetype: "image/webp" } };
+}
+
+export async function randomsticker(ctx: CmdCtx): Promise<CmdResult> {
+  const e = EMOJIS[Math.floor(Math.random() * EMOJIS.length)];
+  return textsticker({ ...ctx, arg: e } as any);
+}
+
+function graphemes(value: string): string[] {
+  try {
+    const segmenter = new Intl.Segmenter("und", { granularity: "grapheme" });
+    return Array.from(segmenter.segment(value), (part) => part.segment);
+  } catch {
+    return Array.from(value);
+  }
+}
+
+function wrapBratText(value: string, maxGraphemes = 15): string[] {
+  const output: string[] = [];
+  for (const rawLine of value.replace(/\r/g, "").split(/\n/)) {
+    const words = rawLine.trim().split(/\s+/).filter(Boolean);
+    let current = "";
+    for (const word of words.length ? words : [""]) {
+      const candidate = current ? `${current} ${word}` : word;
+      if (graphemes(candidate).length <= maxGraphemes || !current) {
+        current = candidate;
+      } else {
+        output.push(current);
+        current = word;
+      }
+      while (graphemes(current).length > maxGraphemes) {
+        const parts = graphemes(current);
+        output.push(parts.splice(0, maxGraphemes).join(""));
+        current = parts.join("");
+      }
+    }
+    if (current || !output.length) output.push(current);
+  }
+  return output.filter((line) => line.length > 0).slice(0, 5);
+}
+
+/** Split line into text runs vs emoji runs so emoji keep native color. */
+function splitTextEmojiRuns(line: string): { kind: "text" | "emoji"; value: string }[] {
+  const chars = graphemes(line);
+  const runs: { kind: "text" | "emoji"; value: string }[] = [];
+  for (const ch of chars) {
+    const isEmoji = /\p{Extended_Pictographic}/u.test(ch) || ch === "\uFE0F" || ch === "\u200D";
+    const kind: "text" | "emoji" = isEmoji ? "emoji" : "text";
+    if (!runs.length || runs[runs.length - 1].kind !== kind) runs.push({ kind, value: ch });
+    else runs[runs.length - 1].value += ch;
+  }
+  return runs;
+}
+
+function bratSvg(text: string, frame = 0): Buffer {
+  // Classic BRAT: white bg, thick upright black text, colored emoji
+  const clean = text.trim().slice(0, 220) || "BRAT";
+  const lines = wrapBratText(clean, 12);
+  const longest = Math.max(1, ...lines.map((line) => graphemes(line).length));
+  const fontSize = Math.max(48, Math.min(82, Math.floor(480 / (longest + 1.5))));
+  const gap = lines.length > 1 ? Math.min(88, Math.floor(360 / lines.length)) : 0;
+  const startY = 240 - ((lines.length - 1) * gap) / 2 + fontSize * 0.32;
+  const strokeW = Math.max(3, Math.floor(fontSize / 14));
+
+  const linesSvg = lines
+    .map((line, i) => {
+      const y = (startY + i * gap).toFixed(1);
+      const runs = splitTextEmojiRuns(line);
+      // Approximate centered tspans by estimating advance width ~0.55em for text, ~1em for emoji
+      let totalUnits = 0;
+      for (const r of runs) {
+        totalUnits += graphemes(r.value).length * (r.kind === "emoji" ? 1.05 : 0.58);
+      }
+      let xUnits = -totalUnits / 2;
+      const parts: string[] = [];
+      for (const r of runs) {
+        const w = graphemes(r.value).length * (r.kind === "emoji" ? 1.05 : 0.58);
+        const x = 240 + xUnits * fontSize;
+        const safe = svgEscape(r.value);
+        if (r.kind === "emoji") {
+          // no forced fill — let color emoji font render naturally
+          parts.push(
+            `<text x="${x.toFixed(1)}" y="${y}" font-size="${fontSize}" text-anchor="start" style="font-family:'Noto Color Emoji','Apple Color Emoji','Segoe UI Emoji',sans-serif">${safe}</text>`
+          );
+        } else {
+          parts.push(
+            `<text x="${x.toFixed(1)}" y="${y}" font-size="${fontSize}" text-anchor="start" fill="none" stroke="#111111" stroke-width="${strokeW}" stroke-linejoin="round" style="font-family:'DejaVu Sans','Noto Sans',Arial,sans-serif;font-weight:900;font-style:normal">${safe}</text>` +
+            `<text x="${x.toFixed(1)}" y="${y}" font-size="${fontSize}" text-anchor="start" fill="#111111" style="font-family:'DejaVu Sans','Noto Sans',Arial,sans-serif;font-weight:900;font-style:normal">${safe}</text>`
+          );
+        }
+        xUnits += w;
+      }
+      return parts.join("");
+    })
+    .join("");
+
+  return Buffer.from(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="480" height="480" viewBox="0 0 480 480">` +
+      `<rect width="480" height="480" fill="#ffffff"/>` +
+      `${linesSvg}</svg>`
+  );
+}
+
+/** BRAT is intentionally a deterministic local text sticker; it never calls an AI service. */
+export async function brat(ctx: CmdCtx): Promise<CmdResult> {
+  if (!ctx.arg.trim()) return { text: `Pakai: ${ctx.bot.prefix}brat <teks> — menghasilkan sticker BRAT WebP tanpa AI.` };
+  const key = await progress(ctx.sock, ctx.n.remoteJid, null, "⌛ Membuat sticker BRAT WebP...");
+  try {
+    const png = await sharp(bratSvg(ctx.arg)).png().toBuffer();
+    const webp = await makeSticker(png, ctx);
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "✅ Sticker BRAT selesai dibuat.");
+    return { media: { kind: "sticker", buffer: webp, mimetype: "image/webp" } };
+  } catch (error: any) {
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🥀 Sticker BRAT gagal dibuat.");
+    throw new CmdError(`🥀 Gagal membuat sticker BRAT: ${String(error?.message || "renderer gagal").slice(0, 180)}`);
+  }
+}
+
+async function bratAnimated(ctx: CmdCtx, mode: "gif" | "vid"): Promise<CmdResult> {
+  if (!ctx.arg.trim()) return { text: `Pakai: ${ctx.bot.prefix}brat${mode === "gif" ? "gif" : "vid"} <teks> — animated sticker WebP tanpa AI.` };
+  const key = await progress(ctx.sock, ctx.n.remoteJid, null, "⌛ Membuat animated BRAT WebP...");
+  try {
+    const out = await withTempFile(await sharp(bratSvg(ctx.arg, 0)).png().toBuffer(), ".png", async (inPath) => {
+    const outPath = `${inPath}.${mode}.webp`;
+    await ffmpeg(["-loop", "1", "-i", inPath, "-t", "3", "-vf", "scale=480:480:force_original_aspect_ratio=decrease,pad=480:480:(ow-iw)/2:(oh-ih)/2,zoompan=z='min(zoom+0.0015,1.18)':d=75:s=480x480:fps=25,format=yuva420p", "-an", "-c:v", "libwebp", "-lossless", "0", "-q:v", "70", "-loop", "0", outPath], 120000);
+    return outPath;
+  });
+    const buffer = fs.readFileSync(out);
+    fs.rmSync(out, { force: true });
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "✅ Animated BRAT selesai dibuat.");
+    return { media: { kind: "sticker", buffer, mimetype: "image/webp" } };
+  } catch (error: any) {
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🥀 Animated BRAT gagal dibuat.");
+    throw new CmdError(`🥀 Gagal membuat animated BRAT: ${String(error?.message || "renderer gagal").slice(0, 180)}`);
+  }
+}
+
+export const bratgif = (ctx: CmdCtx) => bratAnimated(ctx, "gif");
+export const bratvideo = (ctx: CmdCtx) => bratAnimated(ctx, "vid");
+export const bratvid = bratvideo;
+
+function svgEscape(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;");
+}
+
+function memeLines(value: string, max = 22): string[] {
+  return value.trim().split(/\s+/).flatMap((word) => {
+    const parts = word.match(new RegExp(`.{1,${max}}`, "g")) ?? [word];
+    return parts;
+  }).slice(0, 4);
+}
+
+/** Build thick upright meme text SVG (no italic / no slant). */
+function buildMemeTextSvg(width: number, height: number, top: string, bottom: string): Buffer {
+  const topLines = memeLines(top);
+  const bottomLines = memeLines(bottom);
+  // Classic Impact meme: size scales with width, never italic/skewed
+  const fontSize = Math.max(28, Math.min(64, Math.floor(width / 11)));
+  const strokeW = Math.max(3, Math.floor(fontSize / 7));
+  const lineGap = Math.round(fontSize * 1.18);
+  const padTop = Math.max(12, Math.floor(height * 0.04));
+  const padBottom = Math.max(14, Math.floor(height * 0.045));
+  // Upright Impact-style — no transform skew, paint-order stroke then fill
+  const style =
+    `text{font-family:Impact,"Arial Black","DejaVu Sans",Arial,sans-serif;font-weight:900;font-style:normal;` +
+    `font-size:${fontSize}px;fill:#ffffff;stroke:#000000;stroke-width:${strokeW}px;` +
+    `paint-order:stroke fill;letter-spacing:0.5px;dominant-baseline:alphabetic}`;
+  const topSvg = topLines
+    .map((line, i) => {
+      // y = baseline; hanging baseline avoided so text sits level
+      const y = padTop + fontSize + i * lineGap;
+      return `<text x="50%" y="${y}" text-anchor="middle">${svgEscape(line.toUpperCase())}</text>`;
+    })
+    .join("");
+  const bottomSvg = bottomLines
+    .map((line, i) => {
+      const y = height - padBottom - (bottomLines.length - 1 - i) * lineGap;
+      return `<text x="50%" y="${y}" text-anchor="middle">${svgEscape(line.toUpperCase())}</text>`;
+    })
+    .join("");
+  return Buffer.from(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><style>${style}</style>${topSvg}${bottomSvg}</svg>`
+  );
+}
+
+/**
+ * .smeme — meme text on image OR short video (max 8 seconds).
+ * Reply foto/video lalu: .smeme teks atas|teks bawah
+ */
+export async function smeme(ctx: CmdCtx): Promise<CmdResult> {
+  const src = await getMediaSource(ctx);
+  const isImage = src.mimetype.startsWith("image/");
+  const isVideo = src.mimetype.startsWith("video/") || src.mimetype === "image/gif";
+  if (!isImage && !isVideo) {
+    throw new CmdError("⚠️ .smeme hanya menerima reply foto/gambar atau video (maks 6 detik → stiker).");
+  }
+  if (!ctx.arg.trim()) {
+    return {
+      text:
+        `Pakai: reply media lalu\n` +
+        `${ctx.bot.prefix}smeme teks atas|teks bawah\n` +
+        `Contoh: ${ctx.bot.prefix}smeme ADUHH|MALU AKU\n` +
+        `Support: foto → stiker, video → stiker animasi (maks 6 detik).`,
+    };
+  }
+  const parts = ctx.arg.split(/\s*[|;]\s*/);
+  const top = parts.length > 1 ? parts[0] : "";
+  const bottom = parts.length > 1 ? parts.slice(1).join(" ") : parts[0];
+
+  // ---- IMAGE PATH ----
+  if (isImage) {
+    const input = await sharp(src.buffer).rotate().jpeg({ quality: 92 }).toBuffer();
+    const meta = await sharp(input).metadata();
+    const width = Math.max(320, Math.min(960, meta.width ?? 640));
+    const height = Math.max(320, Math.min(960, meta.height ?? 640));
+    const textSvg = buildMemeTextSvg(width, height, top, bottom);
+    const rendered = await sharp(input)
+      .resize(width, height, { fit: "fill" })
+      .composite([{ input: textSvg, top: 0, left: 0 }])
+      .png()
+      .toBuffer();
+    const webp = await makeSticker(rendered, ctx);
+    return { media: { kind: "sticker", buffer: webp, mimetype: "image/webp" } };
+  }
+
+  // ---- VIDEO PATH → animated WebP sticker (max 6s, square) ----
+  const key = await progress(ctx.sock, ctx.n.remoteJid, null, "⌛ Membuat smeme stiker animasi...");
+  try {
+    const outPath = await withTempFile(src.buffer, extOf(src.mimetype) || ".mp4", async (inPath) => {
+      const size = 480;
+      const textPng = await sharp(buildMemeTextSvg(size, size, top, bottom)).png().toBuffer();
+      const overlayPath = inPath + ".overlay.png";
+      fs.writeFileSync(overlayPath, textPng);
+      const outWebp = inPath + ".smeme.webp";
+
+      // Square sticker, overlay meme text, animated WebP, no audio
+      await ffmpeg(
+        [
+          "-i", inPath,
+          "-i", overlayPath,
+          "-t", "6",
+          "-filter_complex",
+          `[0:v]scale=${size}:${size}:force_original_aspect_ratio=decrease,pad=${size}:${size}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=15[base];` +
+            `[base][1:v]overlay=0:0:format=auto,format=yuva420p`,
+          "-an",
+          "-c:v", "libwebp",
+          "-lossless", "0",
+          "-q:v", "70",
+          "-loop", "0",
+          "-preset", "default",
+          outWebp,
+        ],
+        120000
+      );
+      try { fs.rmSync(overlayPath, { force: true }); } catch { /* ignore */ }
+      return outWebp;
+    });
+
+    const buf = fs.readFileSync(outPath);
+    fs.rmSync(outPath, { force: true });
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "✅ Smeme stiker animasi siap.");
+    return {
+      media: {
+        kind: "sticker" as const,
+        buffer: buf,
+        mimetype: "image/webp",
+      },
+    };
+  } catch (error: any) {
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🥀 Smeme stiker gagal.");
+    throw new CmdError(`🥀 Gagal smeme stiker: ${String(error?.message || error).slice(0, 180)}`);
+  }
+}
+
+/** Re-send a quoted view-once image/video/audio as a normal WhatsApp media message. */
+export async function rvo(ctx: CmdCtx): Promise<CmdResult> {
+  if (!ctx.replyKey) return { text: `Pakai: reply foto/video sekali lihat lalu ketik ${ctx.bot.prefix}rvo` };
+  const src = await ctx.getRepliedMedia();
+  if (!src) throw new CmdError("⚠️ Media view-once tidak dapat dibaca. Pastikan bot masih memiliki akses ke pesan tersebut.");
+  const kind: "image" | "video" | "audio" | "document" = src.mimetype.startsWith("image/") ? "image" : src.mimetype.startsWith("video/") ? "video" : src.mimetype.startsWith("audio/") ? "audio" : "document";
+  const ext = extOf(src.mimetype).replace(/^\./, "") || "bin";
+  return { media: { kind, buffer: src.buffer, mimetype: src.mimetype, filename: `recovered-view-once.${ext}`, caption: "✅ Media view-once berhasil disimpan sebagai media biasa." } };
+}
+
+export async function toimg(ctx: CmdCtx): Promise<CmdResult> {
+  const src = await getMediaSource(ctx);
+  const png = await sharp(src.buffer).rotate().png().toBuffer();
+  return { media: { kind: "image", buffer: png, mimetype: "image/png" } };
+}
+
+export async function stickerinfo(ctx: CmdCtx): Promise<CmdResult> {
+  const src = await getMediaSource(ctx);
+  // parse WebP EXIF chunk (real EXIF data written by sticker tools)
+  let exifXml = "";
+  try {
+    const b = src.buffer;
+    const idx = b.indexOf(Buffer.from("EXIF", "ascii"), 12);
+    if (idx > 0) {
+      const size = b.readUInt32LE(idx - 4);
+      const chunk = b.subarray(idx + 4, idx + 4 + size);
+      const txt = chunk.toString("utf8");
+      const xmlStart = txt.indexOf("<?xmp");
+      exifXml = xmlStart > -1 ? txt.slice(xmlStart) : "";
+    }
+  } catch {
+    /* ignore */
+  }
+  const pack = /dc:creator="([^"]*)"/.exec(exifXml)?.[1];
+  const author = /xmp:CreatorTool="([^"]*)"/.exec(exifXml)?.[1];
+  const ft: any = await import("file-type");
+  const type = await ft.fileTypeFromBuffer(src.buffer);
+  return {
+    text: box("🏷️ STICKER INFO", [
+      `Format : ${type?.mime ?? src.mimetype}`,
+      `Ukuran : ${(src.buffer.length / 1024).toFixed(1)} KB`,
+      `Pack   : ${pack ?? "-"}`,
+      `Tool   : ${author ?? "-"}`,
+    ]),
+  };
+}
+
+export async function videosticker(ctx: CmdCtx): Promise<CmdResult> {
+  const src = await getMediaSource(ctx);
+  if (!src.mimetype.startsWith("video") && src.mimetype !== "image/gif")
+    throw new CmdError("⚠️ Video/GIF dibutuhkan untuk .videosticker");
+  const out = await withTempFile(src.buffer, extOf(src.mimetype), async (inPath) => {
+    const outPath = inPath + ".webp";
+    await ffmpeg(["-i", inPath, "-t", "10", "-vf", "scale=480:480:force_original_aspect_ratio=decrease,format=rgba,pad=480:480:(ow-iw)/2:(oh-ih)/2", "-lossless", "true", "-q:v", "70", "-vsync", "0", "-c:v", "libwebp", outPath]);
+    return outPath;
+  });
+  const buf = fs.readFileSync(out);
+  fs.rmSync(out, { force: true });
+  return { media: { kind: "sticker", buffer: buf, mimetype: "image/webp" } };
+}
+export const gifsticker = videosticker;
+
+export async function stickersearch(ctx: CmdCtx): Promise<CmdResult> {
+  return {
+    text: "❌ Sumber pencarian sticker publik yang mengizinkan akses belum dikonfigurasi di server ini. Gunakan .sticker (reply gambar) atau .textsticker untuk membuat sticker asli.",
+  };
+}
+
+function escapeSvg(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+async function templateImage(text: string, theme: "fakech" | "windowspink" | "fakeswwa"): Promise<Buffer> {
+  const safe = escapeSvg(text.slice(0, 240));
+  const lines = safe.match(/.{1,28}(?:\s|$)/g)?.slice(0, 8) ?? [safe];
+  const colors = theme === "windowspink" ? { bg: "#f7c7dc", panel: "#fff1f7", ink: "#5b2144", accent: "#e879b5" } : theme === "fakeswwa" ? { bg: "#dce7ef", panel: "#f8fbfd", ink: "#172b36", accent: "#25d366" } : { bg: "#141a27", panel: "#24304a", ink: "#f8fafc", accent: "#38bdf8" };
+  const textSvg = lines.map((line, index) => `<text x="540" y="${260 + index * 58}" text-anchor="middle" font-family="Arial,sans-serif" font-size="38" fill="${colors.ink}">${line.trim()}</text>`).join("");
+  const label = theme === "fakeswwa" ? "DEMO • MOCKUP • SIMULATION" : "WATER AI CLOUD • TEMPLATE";
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="720"><rect width="1080" height="720" fill="${colors.bg}"/><rect x="90" y="80" width="900" height="560" rx="28" fill="${colors.panel}" stroke="${colors.accent}" stroke-width="6"/><circle cx="145" cy="135" r="18" fill="${colors.accent}"/><text x="185" y="148" font-family="Arial" font-size="30" font-weight="bold" fill="${colors.ink}">${theme.toUpperCase()}</text>${textSvg}<text x="540" y="585" text-anchor="middle" font-family="Arial" font-size="24" font-weight="bold" fill="${colors.accent}">${label}</text></svg>`;
+  return sharp(Buffer.from(svg)).png().toBuffer();
+}
+
+async function templateCommand(ctx: CmdCtx, theme: "fakech" | "windowspink" | "fakeswwa"): Promise<CmdResult> {
+  const text = ctx.arg.trim();
+  if (!text) return { text: `Pakai: .${theme} <teks>` };
+  const image = await templateImage(text, theme);
+  return { media: { kind: "image", buffer: image, mimetype: "image/png", caption: theme === "fakeswwa" ? "DEMO / MOCKUP / SIMULATION — bukan bukti percakapan nyata" : "Template image WATER AI CLOUD" } };
+}
+
+export const fakech = (ctx: CmdCtx) => templateCommand(ctx, "fakech");
+export const windowspink = (ctx: CmdCtx) => templateCommand(ctx, "windowspink");
+export const fakeswwa = (ctx: CmdCtx) => templateCommand(ctx, "fakeswwa");
+
+export async function img2img(ctx: CmdCtx): Promise<CmdResult> {
+  const prompt = ctx.arg.trim();
+  if (!prompt) return { text: "Pakai: `.img2img <instruksi edit>` dengan **reply gambar**" };
+  const source = await getMediaSource(ctx);
+  if (!source.mimetype.startsWith("image/")) throw new CmdError("❌ IMG2IMG membutuhkan reply gambar.");
+
+  const bs: any = ctx.bot.settings || {};
+  const key = String(bs.geminiApiKey || bs.aiApiKey || process.env.GEMINI_API_KEY || process.env.AI_API_KEY || "").trim();
+  const endpoint = process.env.IMAGE_EDIT_API_URL?.trim();
+
+  // 1) Dedicated image-edit API jika ada
+  if (endpoint) {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(process.env.IMAGE_EDIT_API_KEY
+          ? { authorization: `Bearer ${process.env.IMAGE_EDIT_API_KEY}` }
+          : {}),
+      },
+      body: JSON.stringify({
+        prompt,
+        imageBase64: source.buffer.toString("base64"),
+        mimeType: source.mimetype,
+      }),
+      signal: AbortSignal.timeout(120000),
+    });
+    if (!response.ok) throw new CmdError(`❌ Provider IMG2IMG gagal (HTTP ${response.status}).`);
+    const data: any = await response.json().catch(() => null);
+    const base64 = data?.imageBase64 || data?.data?.[0]?.b64_json;
+    if (typeof base64 !== "string") throw new CmdError("❌ Provider IMG2IMG tidak mengembalikan gambar valid.");
+    const output = Buffer.from(base64, "base64");
+    await sharp(output).metadata();
+    return { media: { kind: "image", buffer: output, mimetype: "image/png", caption: "✅ IMG2IMG selesai" } };
+  }
+
+  // 2) Gemini (API key dashboard) — native generateContent + image
+  if (key && (key.startsWith("AIza") || key.toLowerCase().includes("gemini"))) {
+    const models = [
+      "gemini-2.0-flash-preview-image-generation",
+      "gemini-2.0-flash-exp-image-generation",
+      "gemini-2.0-flash",
+      "gemini-1.5-flash",
+    ];
+    const b64 = source.buffer.toString("base64");
+    const mime = source.mimetype || "image/png";
+    const errors: string[] = [];
+    for (const model of models) {
+      try {
+        const url =
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
+        const body: any = {
+          contents: [
+            {
+              role: "user",
+              parts: [
+                { text: `Edit this image according to the instruction. Return only the edited image.\nInstruction: ${prompt}` },
+                { inline_data: { mime_type: mime, data: b64 } },
+              ],
+            },
+          ],
+          generationConfig: {
+            responseModalities: ["TEXT", "IMAGE"],
+          },
+        };
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(120000),
+        });
+        if (!res.ok) {
+          errors.push(`${model}: HTTP ${res.status}`);
+          continue;
+        }
+        const j: any = await res.json();
+        const parts = j?.candidates?.[0]?.content?.parts || [];
+        for (const part of parts) {
+          const data =
+            part?.inlineData?.data ||
+            part?.inline_data?.data;
+          const outMime =
+            part?.inlineData?.mimeType ||
+            part?.inline_data?.mime_type ||
+            "image/png";
+          if (typeof data === "string" && data.length > 100) {
+            const output = Buffer.from(data, "base64");
+            await sharp(output).metadata();
+            return {
+              media: {
+                kind: "image",
+                buffer: output,
+                mimetype: outMime.startsWith("image/") ? outMime : "image/png",
+                caption: `✅ IMG2IMG (Gemini · ${model})`,
+              },
+            };
+          }
+        }
+        errors.push(`${model}: no image in response`);
+      } catch (e: any) {
+        errors.push(`${model}: ${String(e?.message || e).slice(0, 80)}`);
+      }
+    }
+    throw new CmdError(
+      "❌ Gemini belum mengembalikan gambar hasil edit.\n" +
+        "Model image-generation mungkin belum aktif di key ini.\n" +
+        errors.slice(0, 3).join("\n")
+    );
+  }
+
+  return {
+    text:
+      "❌ IMG2IMG butuh salah satu:\n" +
+      "• API Key **Gemini** di Dashboard bot, atau\n" +
+      "• Env `IMAGE_EDIT_API_URL` (provider image-edit)",
+  };
+}
+
+export async function stickerpacksearch(ctx: CmdCtx): Promise<CmdResult> {
+  const query = ctx.arg.trim();
+  if (!query) return { text: "Pakai: .stickerpack-search <keyword>" };
+  const endpoint = process.env.STICKERPACK_SEARCH_URL?.trim();
+  if (!endpoint) return { text: "❌ Sticker pack search membutuhkan STICKERPACK_SEARCH_URL provider nyata. Tidak ada hasil palsu." };
+  const response = await fetch(`${endpoint}?q=${encodeURIComponent(query)}&limit=5`, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(30000) });
+  if (!response.ok) throw new CmdError(`❌ Provider sticker pack gagal (HTTP ${response.status}).`);
+  const data: any = await response.json();
+  const packs = Array.isArray(data?.packs) ? data.packs.slice(0, 5) : [];
+  if (!packs.length) return { text: `❌ Sticker pack tidak ditemukan untuk "${query}".` };
+  return { text: box("🎨 STICKER PACK SEARCH", packs.map((p: any, i: number) => `${i + 1}. ${truncate(String(p.name || "Tanpa nama"), 80)}\nJumlah: ${p.count ?? "-"}\nAuthor: ${p.author ?? "-"}\n${p.url ?? ""}`)) };
+}
+
+export async function toquickvideo(ctx: CmdCtx): Promise<CmdResult> {
+  const source = await getMediaSource(ctx);
+  if (!source.mimetype.startsWith("video/")) throw new CmdError("❌ .toquickvideo membutuhkan reply video.");
+  const out = await withTempFile(source.buffer, extOf(source.mimetype), async (inPath) => {
+    const outPath = `${inPath}.quick.mp4`;
+    await ffmpeg(["-i", inPath, "-c:v", "libx264", "-preset", "veryfast", "-crf", "28", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", outPath], 120000);
+    return outPath;
+  });
+  try {
+    const buffer = fs.readFileSync(out);
+    const type: any = await (await import("file-type")).fileTypeFromBuffer(buffer);
+    if (type?.mime !== "video/mp4") throw new CmdError("❌ Output optimasi bukan MP4 valid.");
+    return { media: { kind: "video", buffer, filename: "water-quickvideo.mp4", mimetype: "video/mp4", caption: "✅ Video dioptimalkan" } };
+  } finally { fs.rmSync(out, { force: true }); }
+}
+
+/* --------------------------------- IMAGE -------------------------------- */
+async function imgSource(ctx: CmdCtx): Promise<Buffer> {
+  const src = await getMediaSource(ctx);
+  if (!src.mimetype.startsWith("image")) throw new CmdError("❌ Format media tidak didukung — reply gambar.");
+  return src.buffer;
+}
+
+export async function enhance(ctx: CmdCtx): Promise<CmdResult> {
+  const buf = await imgSource(ctx);
+  const out = await (sharp(buf) as any).enhance().jpeg({ quality: 90 }).toBuffer();
+  return { media: { kind: "image", buffer: out, mimetype: "image/jpeg" } };
+}
+
+export async function upscale(ctx: CmdCtx): Promise<CmdResult> {
+  const buf = await imgSource(ctx);
+  const meta = await sharp(buf).metadata();
+  const out = await sharp(buf).resize({ width: (meta.width ?? 512) * 2, kernel: "lanczos3" }).jpeg({ quality: 92 }).toBuffer();
+  return { media: { kind: "image", buffer: out, mimetype: "image/jpeg" } };
+}
+
+export async function compress(ctx: CmdCtx): Promise<CmdResult> {
+  const src = await getMediaSource(ctx);
+  if (src.mimetype.startsWith("video")) {
+    const out = await withTempFile(src.buffer, extOf(src.mimetype), async (inPath) => {
+      const outPath = inPath.replace(/\.\w+$/, ".mp4");
+      await ffmpeg(["-i", inPath, "-crf", "30", "-preset", "veryfast", "-c:v", "libx264", "-c:a", "aac", outPath], 180000);
+      return outPath;
+    });
+    const buf = fs.readFileSync(out);
+    fs.rmSync(out, { force: true });
+    return { media: { kind: "video", buffer: buf, mimetype: "video/mp4", caption: `📦 Terkompres: ${(buf.length / 1024 / 1024).toFixed(2)} MB` } };
+  }
+  let buf: Buffer;
+  if (src.mimetype.startsWith("image")) buf = await sharp(src.buffer).jpeg({ quality: 60 }).toBuffer();
+  else buf = src.buffer;
+  const before = (src.buffer.length / 1024).toFixed(1);
+  const after = (buf.length / 1024).toFixed(1);
+  return { media: { kind: "image", buffer: buf, mimetype: "image/jpeg", caption: `📦 ${before} KB → ${after} KB` } };
+}
+
+export async function resize(ctx: CmdCtx): Promise<CmdResult> {
+  const [w, h] = ctx.parts.slice(1).map((x) => parseInt(x, 10));
+  if (!w || !h) return { text: "Pakai: .resize <lebar> <tinggi> (reply gambar)" };
+  const buf = await imgSource(ctx);
+  const out = await sharp(buf).resize(w, h, { fit: "fill" }).jpeg({ quality: 90 }).toBuffer();
+  return { media: { kind: "image", buffer: out, mimetype: "image/jpeg" } };
+}
+
+export async function crop(ctx: CmdCtx): Promise<CmdResult> {
+  const [w, h] = ctx.parts.slice(1).map((x) => parseInt(x, 10));
+  if (!w || !h) return { text: "Pakai: .crop <lebar> <tinggi> (center crop, reply gambar)" };
+  const buf = await imgSource(ctx);
+  const meta = await sharp(buf).metadata();
+  const iw = Math.min(w, meta.width ?? 0);
+  const ih = Math.min(h, meta.height ?? 0);
+  const out = await sharp(buf).extract({ left: Math.max(0, ((meta.width ?? 0) - iw) >> 1), top: Math.max(0, ((meta.height ?? 0) - ih) >> 1), width: iw, height: ih }).jpeg({ quality: 92 }).toBuffer();
+  return { media: { kind: "image", buffer: out, mimetype: "image/jpeg" } };
+}
+
+export async function rotate(ctx: CmdCtx): Promise<CmdResult> {
+  const deg = parseInt(ctx.arg, 10);
+  if (![90, 180, 270].includes(deg)) return { text: "Pakai: .rotate 90 | 180 | 270" };
+  const buf = await imgSource(ctx);
+  const out = await sharp(buf).rotate(deg).jpeg({ quality: 92 }).toBuffer();
+  return { media: { kind: "image", buffer: out, mimetype: "image/jpeg" } };
+}
+
+export async function flip(ctx: CmdCtx): Promise<CmdResult> {
+  const dir = ctx.arg.toLowerCase();
+  if (dir === "horizontal") {
+    const buf = await imgSource(ctx);
+    const out = await sharp(buf).flip().jpeg({ quality: 92 }).toBuffer();
+    return { media: { kind: "image", buffer: out, mimetype: "image/jpeg" } };
+  }
+  if (dir === "vertical") {
+    const buf = await imgSource(ctx);
+    const out = await sharp(buf).flop().jpeg({ quality: 92 }).toBuffer();
+    return { media: { kind: "image", buffer: out, mimetype: "image/jpeg" } };
+  }
+  return { text: "Pakai: .flip horizontal | vertical" };
+}
+
+export async function blur(ctx: CmdCtx): Promise<CmdResult> {
+  const buf = await imgSource(ctx);
+  const out = await sharp(buf).blur(3).jpeg({ quality: 90 }).toBuffer();
+  return { media: { kind: "image", buffer: out, mimetype: "image/jpeg" } };
+}
+
+export async function sharpen(ctx: CmdCtx): Promise<CmdResult> {
+  const buf = await imgSource(ctx);
+  const out = await sharp(buf).sharpen({ sigma: 2 }).jpeg({ quality: 90 }).toBuffer();
+  return { media: { kind: "image", buffer: out, mimetype: "image/jpeg" } };
+}
+
+export async function grayscale(ctx: CmdCtx): Promise<CmdResult> {
+  const buf = await imgSource(ctx);
+  const out = await sharp(buf).greyscale().jpeg({ quality: 90 }).toBuffer();
+  return { media: { kind: "image", buffer: out, mimetype: "image/jpeg" } };
+}
+
+export async function watermark(ctx: CmdCtx): Promise<CmdResult> {
+  const buf = await imgSource(ctx);
+  const meta = await sharp(buf).metadata();
+  const w = meta.width ?? 800;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="80"><text x="${w - 12}" y="50" font-size="28" font-family="sans-serif" font-weight="bold" fill="rgba(34,211,238,0.9)" text-anchor="end">💧 WATER AI</text></svg>`;
+  const out = await sharp(buf).composite([{ input: Buffer.from(svg), gravity: "southeast" }]).jpeg({ quality: 92 }).toBuffer();
+  return { media: { kind: "image", buffer: out, mimetype: "image/jpeg" } };
+}
+
+export async function removebg(ctx: CmdCtx): Promise<CmdResult> {
+  const key = process.env.REMOVEBG_API_KEY;
+  if (!key) return { text: "❌ Feature removebg butuh REMOVEBG_API_KEY di server (diset oleh admin). Tidak ada simulasi." };
+  const src = await getMediaSource(ctx);
+  try {
+    const res = await fetch("https://api.remove.bg/v1.0/removebg", {
+      method: "POST",
+      headers: { "X-Api-Key": key, "Content-Type": "application/octet-stream", "Accept": "image/png" },
+      body: new Uint8Array(src.buffer),
+      signal: AbortSignal.timeout(90000),
+    });
+    if (!res.ok) return { text: `❌ remove.bg menolak request (HTTP ${res.status}).` };
+    const out = Buffer.from(await res.arrayBuffer());
+    return { media: { kind: "image", buffer: out, mimetype: "image/png" } };
+  } catch {
+    return { text: "⏱️ Proses terlalu lama. Silakan coba lagi." };
+  }
+}
+
+export async function imginfo(ctx: CmdCtx): Promise<CmdResult> {
+  const src = await getMediaSource(ctx);
+  const ft: any = await import("file-type");
+  const type = await ft.fileTypeFromBuffer(src.buffer);
+  let extra = "";
+  if (src.mimetype.startsWith("image") || type?.mime?.startsWith("image")) {
+    try {
+      const m = await sharp(src.buffer).metadata();
+      extra = `\nDimensi : ${m.width}×${m.height}\nFormat  : ${m.format}\nColor   : ${m.space ?? "-"}`;
+    } catch {
+      /* not an image */
+    }
+  }
+  return {
+    text: box("🖼️ MEDIA INFO", [
+      `Type    : ${type?.mime ?? src.mimetype}`,
+      `Ext     : ${type?.ext ?? extOf(src.mimetype)}`,
+      `Ukuran  : ${(src.buffer.length / 1024).toFixed(1)} KB`,
+      extra.trim(),
+    ].filter(Boolean)),
+  };
+}
+
+/* --------------------------------- MEDIA -------------------------------- */
+function needsMedia(mime: string, kind: "video" | "audio"): string | null {
+  if (kind === "video" && !(mime.startsWith("video") || mime === "image/gif")) return "⚠️ Video dibutuhkan untuk command ini.";
+  if (kind === "audio" && !(mime.startsWith("audio") || mime.startsWith("video") || mime === "image/gif")) return "⚠️ Audio/video dibutuhkan untuk command ini.";
+  return null;
+}
+
+export async function tomp3(ctx: CmdCtx): Promise<CmdResult> {
+  const src = await getMediaSource(ctx);
+  const err = needsMedia(src.mimetype, "audio");
+  if (err) return { text: err };
+  const out = await withTempFile(src.buffer, extOf(src.mimetype), async (inPath) => {
+    const outPath = inPath + ".mp3";
+    await ffmpeg(["-i", inPath, "-vn", "-ar", "44100", "-ac", "2", "-b:a", "192k", outPath]);
+    return outPath;
+  });
+  const buf = fs.readFileSync(out);
+  fs.rmSync(out, { force: true });
+  return { media: { kind: "audio", buffer: buf, mimetype: "audio/mpeg", filename: "audio.mp3" } };
+}
+export const toaudio = tomp3;
+
+export async function tovoice(ctx: CmdCtx): Promise<CmdResult> {
+  const src = await getMediaSource(ctx);
+  const err = needsMedia(src.mimetype, "audio");
+  if (err) return { text: err };
+  const out = await withTempFile(src.buffer, extOf(src.mimetype), async (inPath) => {
+    const outPath = inPath + ".ogg";
+    await ffmpeg(["-i", inPath, "-vn", "-c:a", "libopus", "-b:a", "64k", outPath]);
+    return outPath;
+  });
+  const buf = fs.readFileSync(out);
+  fs.rmSync(out, { force: true });
+  return { media: { kind: "audio", buffer: buf, mimetype: "audio/ogg", caption: "🎤 Voice" } };
+}
+
+export async function togif(ctx: CmdCtx): Promise<CmdResult> {
+  const src = await getMediaSource(ctx);
+  if (!src.mimetype.startsWith("video") && src.mimetype !== "image/gif") return { text: "⚠️ Video dibutuhkan untuk .togif" };
+  const out = await withTempFile(src.buffer, extOf(src.mimetype), async (inPath) => {
+    const outPath = inPath + ".gif";
+    await ffmpeg(
+      ["-i", inPath, "-t", "8", "-vf", "fps=12,scale=320:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse", outPath],
+      180000
+    );
+    return outPath;
+  });
+  const buf = fs.readFileSync(out);
+  fs.rmSync(out, { force: true });
+  return { media: { kind: "image", buffer: buf, mimetype: "image/gif" } };
+}
+
+export async function topdf(ctx: CmdCtx): Promise<CmdResult> {
+  const arg = ctx.arg.trim();
+  const doc = await PDFDocument.create();
+  if (/^https?:\/\//i.test(arg)) {
+    const src = { buffer: await safeFetch(arg), mimetype: "image/jpeg" };
+    return { text: "⚠️ URL gambar untuk .topdf: reply gambar, atau pakai .topdf dengan reply. (URL teks tidak didukung)" };
+  }
+  const media = await ctx.getRepliedMedia().catch(() => null);
+  if (media && (media.mimetype.startsWith("image") || media.mimetype === "application/pdf")) {
+    let page = doc.addPage([595, 842]);
+    try {
+      if (media.mimetype === "application/pdf") {
+        const srcDoc = await PDFDocument.load(media.buffer);
+        const pages = await doc.copyPages(srcDoc, srcDoc.getPageIndices());
+        pages.forEach((p) => doc.addPage(p));
+        page = undefined as any;
+        void page;
+      } else {
+        const img = media.mimetype === "image/png" ? await doc.embedPng(media.buffer) : await doc.embedJpg(media.buffer);
+        const w = Math.min(555, img.width);
+        const h = (img.height / img.width) * w;
+        page.drawImage(img, { x: (595 - w) / 2, y: (842 - h) / 2, width: w, height: Math.min(h, 800) });
+      }
+    } catch {
+      return { text: "❌ Gagal memproses file menjadi PDF (format tidak didukung)." };
+    }
+  } else if (ctx.arg) {
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const lines = ctx.arg.split(/\n/).flatMap((l) => l.match(/.{1,90}/g) ?? [l]);
+    const page = doc.addPage([595, 842]);
+    let y = 800;
+    for (const line of lines.slice(0, 100)) {
+      page.drawText(line, { x: 40, y, size: 11, font, color: rgb(0.1, 0.2, 0.3) });
+      y -= 16;
+      if (y < 40) break;
+    }
+  } else {
+    return { text: "Pakai: .topdf <teks> atau reply gambar" };
+  }
+  const bytes = await doc.save();
+  return { media: { kind: "document", buffer: Buffer.from(bytes), mimetype: "application/pdf", filename: "water-ai.pdf", caption: "📄 PDF dibuat (pdf-lib)" } };
+}
+
+export async function convert(ctx: CmdCtx): Promise<CmdResult> {
+  const target = (ctx.parts[1] ?? "").toLowerCase();
+  if (!["png", "jpg", "jpeg", "webp", "mp3", "ogg", "m4a"].includes(target))
+    return { text: "Pakai: .convert <png|jpg|webp|mp3|ogg|mp4>" };
+  const src = await getMediaSource(ctx);
+  if (["png", "jpg", "jpeg", "webp"].includes(target)) {
+    if (!src.mimetype.startsWith("image")) return { text: "⚠️ Reply gambar untuk konversi image." };
+    const fmt = target === "jpg" || target === "jpeg" ? "jpeg" : target;
+    const img = sharp(src.buffer);
+    const out =
+      fmt === "jpeg"
+        ? await img.jpeg({ quality: 90 }).toBuffer()
+        : fmt === "webp"
+          ? await img.webp({ quality: 90 }).toBuffer()
+          : await img.png().toBuffer();
+    return { media: { kind: "image", buffer: out, mimetype: `image/${fmt}`, caption: ` Dikonversi ke .${target}` } };
+  }
+  const out = await withTempFile(src.buffer, extOf(src.mimetype), async (inPath) => {
+    const ext = target === "m4a" ? ".m4a" : `.${target}`;
+    const outPath = inPath + ext;
+    await ffmpeg(["-i", inPath, "-vn", "-ar", "44100", "-ac", "2", outPath]);
+    return outPath;
+  });
+  const buf = fs.readFileSync(out);
+  fs.rmSync(out, { force: true });
+  const mime = target === "mp3" ? "audio/mpeg" : target === "ogg" ? "audio/ogg" : "audio/mp4";
+  return { media: { kind: "audio", buffer: buf, mimetype: mime, caption: `🔁 Dikonversi ke .${target}` } };
+}
+
+export async function mediainfo(ctx: CmdCtx): Promise<CmdResult> {
+  const src = await getMediaSource(ctx);
+  const lines = [`Type : ${src.mimetype}`, `Ukuran : ${(src.buffer.length / 1024).toFixed(1)} KB`];
+  try {
+    const out = await withTempFile(src.buffer, extOf(src.mimetype), async (inPath) => {
+      const { stderr } = await pExecFile(FF || "ffmpeg", ["-hide_banner", "-i", inPath], { timeout: 30000 });
+      const dur = /Duration:\s*([\d:.]+)/.exec(stderr)?.[1];
+      const res = /(\d{2,5})x(\d{2,5})/.exec(stderr)?.[0];
+      const codec = /Video:\s*([\w ]+)/.exec(stderr)?.[1];
+      return { dur, res, codec };
+    });
+    if (out?.dur) lines.push(`Durasi : ${out.dur}`);
+    if (out?.res) lines.push(`Resolusi: ${out.res}`);
+    if (out?.codec) lines.push(`Codec : ${out.codec}`);
+  } catch {
+    /* image or no ffprobe */
+    try {
+      const m = await sharp(src.buffer).metadata();
+      if (m.width) lines.push(`Dimensi : ${m.width}×${m.height}`, `Format  : ${m.format}`);
+    } catch {
+      /* ignore */
+    }
+  }
+  return { text: box("🎬 MEDIA INFO", lines) };
+}
+
+export async function thumbnail(ctx: CmdCtx): Promise<CmdResult> {
+  const src = await getMediaSource(ctx);
+  if (!src.mimetype.startsWith("video")) return { text: "⚠️ Video dibutuhkan untuk .thumbnail" };
+  const out = await withTempFile(src.buffer, extOf(src.mimetype), async (inPath) => {
+    const outPath = inPath + ".jpg";
+    await ffmpeg(["-i", inPath, "-vframes", "1", "-q:v", "2", "-vf", "scale=640:-1", outPath]);
+    return outPath;
+  });
+  const buf = fs.readFileSync(out);
+  fs.rmSync(out, { force: true });
+  return { media: { kind: "image", buffer: buf, mimetype: "image/jpeg" } };
+}
+
+/* ---------------------------------- BRAT -------------------------------- */
+const BRAT_LINES = ["BRATSTAR 💅", "iconic moment ✨", "no cap, ini brat energy 😤", "it's giving... menang 🏆", "dude. literal icon 💎"];
+
+export async function bratsticker(ctx: CmdCtx): Promise<CmdResult> {
+  const line = BRAT_LINES[Math.floor(Math.random() * BRAT_LINES.length)];
+  const c: CmdCtx = { ...ctx, arg: line };
+  return textsticker(c);
+}
+
+export { sanitizeFilename };
+
+
+/** Upload replied media to catbox.moe → public URL */
+export async function tourl(ctx: CmdCtx): Promise<CmdResult> {
+  const quoted = await ctx.getRepliedMedia();
+  if (!quoted) {
+    return {
+      text: box("🔗 TOURL — Catbox", [
+        "Reply *foto / video / audio / dokumen* lalu ketik:",
+        `*${ctx.bot.prefix}tourl*`,
+        "",
+        "Bot akan upload ke catbox.moe dan mengirim link publik.",
+      ]),
+    };
+  }
+  if (quoted.buffer.length > MAX_FILE_BYTES) throw new CmdError("🥀 File melebihi 50 MB.");
+  const key = await progress(ctx.sock, ctx.n.remoteJid, null, "⏳ Upload ke catbox.moe...");
+  try {
+    const ft = await import("file-type");
+    const detected = await ft.fileTypeFromBuffer(quoted.buffer);
+    const ext = detected?.ext || (quoted.mimetype?.split("/")[1]?.split(";")[0] || "bin");
+    const mime = detected?.mime || quoted.mimetype || "application/octet-stream";
+    const form = new FormData();
+    form.append("reqtype", "fileupload");
+    // Salin ke Uint8Array murni agar TypeScript menerima sebagai BlobPart
+    const bytes = Uint8Array.from(quoted.buffer);
+    const file = new File([bytes], `waterai.${ext}`, { type: mime });
+    form.append("fileToUpload", file);
+    const res = await fetch("https://catbox.moe/user/api.php", {
+      method: "POST",
+      body: form,
+      signal: AbortSignal.timeout(90_000),
+    });
+    const url = (await res.text()).trim();
+    if (!res.ok || !/^https?:\/\//i.test(url)) {
+      throw new CmdError(`🥀 Upload gagal: ${url.slice(0, 120) || `HTTP ${res.status}`}`);
+    }
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "✅ Upload selesai.");
+    return {
+      text: box("✅ TOURL BERHASIL", [
+        `📦 Tipe : ${mime}`,
+        `📁 Ukuran : ${(quoted.buffer.length / 1024).toFixed(1)} KB`,
+        `🔗 URL : ${url}`,
+      ]),
+    };
+  } catch (e: any) {
+    if (key) await progress(ctx.sock, ctx.n.remoteJid, key, "🥀 Upload gagal.");
+    if (e instanceof CmdError) throw e;
+    throw new CmdError(`🥀 Gagal upload catbox: ${String(e?.message || e).slice(0, 160)}`);
+  }
+}

@@ -1,0 +1,81 @@
+# WATER AI CLOUD — Railway production image
+# yt-dlp resmi memakai Python 3 saat dijalankan; Bookworm sengaja dipakai
+# agar runtime downloader sama dengan lingkungan deployment yang diminta.
+FROM node:22-bookworm-slim AS base
+
+ARG YTDLP_CHANNEL=nightly
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV PYTHONUNBUFFERED=1
+ENV YTDLP_PATH=/usr/local/bin/yt-dlp
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    imagemagick \
+    libmagickwand-dev \
+    libmagickcore-dev \
+    libvips-dev \
+    libjpeg-dev \
+    libpng-dev \
+    libwebp-dev \
+    libgif-dev \
+    libtiff-dev \
+    libheif-dev \
+    libavif-dev \
+    librsvg2-dev \
+    python3 \
+    python3-pip \
+    git \
+    curl \
+    wget \
+    unzip \
+    zip \
+    jq \
+    build-essential \
+    pkg-config \
+    ca-certificates \
+    fontconfig \
+    fonts-dejavu \
+    fonts-noto-core \
+    fonts-noto-color-emoji \
+    && rm -rf /var/lib/apt/lists/* \
+    && if [ "${YTDLP_CHANNEL}" = "nightly" ]; then \
+         wget -q "https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp" -O /usr/local/bin/yt-dlp; \
+       else \
+         wget -q "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp" -O /usr/local/bin/yt-dlp; \
+       fi \
+    && chmod 0755 /usr/local/bin/yt-dlp \
+    && /usr/local/bin/yt-dlp --version \
+    && python3 --version \
+    && ffmpeg -version | head -1
+
+WORKDIR /app
+
+FROM base AS deps
+COPY package.json package-lock.json* .npmrc* ./
+# Prefer npm install when lockfile missing/outdated (avoids ETARGET on new deps)
+# Explicit registry via .npmrc so @stazyu/baileys resolves on public npm
+RUN if [ -f package-lock.json ]; then \
+      npm ci --include=dev --no-audit --no-fund || npm install --include=dev --no-audit --no-fund; \
+    else \
+      npm install --include=dev --no-audit --no-fund; \
+    fi \
+ && test -d node_modules/@stazyu/baileys \
+ && echo "OK: @stazyu/baileys installed"
+
+FROM base AS build
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV DATABASE_URL=postgresql://dummy:dummy@127.0.0.1:5432/dummy
+RUN npm run build
+
+FROM base AS run
+COPY --from=build /app ./
+RUN mkdir -p /app/data/bots /app/data/tmp \
+    && chown -R node:node /app/data
+USER node
+EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s \
+  CMD wget -qO- http://localhost:3000/api/health || exit 1
+CMD ["sh", "scripts/start.sh"]
