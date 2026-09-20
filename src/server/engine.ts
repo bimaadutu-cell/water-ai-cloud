@@ -578,15 +578,6 @@ async function recordOut(
     chatJid: to,
     text: text?.slice(0, 2000) ?? null,
   });
-  await addLog({
-    userId: bot.userId,
-    botId: bot.id,
-    level: "info",
-    event: "message.received",
-    message: `Pesan masuk dari ${n.sender}${n.isGroup ? " di grup" : ""}: ${n.text.slice(0, 240) || `[${n.type}]`}`,
-    status: "received",
-    meta: { chatJid: n.remoteJid, sender: n.sender, type: n.type, isGroup: n.isGroup, messageId: n.messageId },
-  }).catch(() => {});
   await db
     .update(bots)
     .set({
@@ -983,6 +974,16 @@ async function handleIncoming(rb: RunningBot, bot: BotRow, m: any) {
     text: n.text.slice(0, 2000) || null,
     meta: { messageId: n.messageId, sender: n.sender, isGroup: n.isGroup },
   });
+  await addLog({
+    userId: bot.userId,
+    botId: bot.id,
+    level: "info",
+    event: "message.received",
+    message: `Pesan masuk dari ${n.sender}${n.isGroup ? " di grup" : ""}: ${n.text.slice(0, 240) || `[${n.type}]`}`,
+    status: "received",
+    meta: { chatJid: n.remoteJid, sender: n.sender, type: n.type, isGroup: n.isGroup, messageId: n.messageId },
+  }).catch(() => {});
+
   await db
     .update(bots)
     .set({
