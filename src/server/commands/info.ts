@@ -1572,6 +1572,10 @@ interface TttState {
   /** chat JID where the host started the invite (group or private) */
   hostChat?: string;
   gameId?: string;
+  /** Online multiplayer room credentials used by the Rich HTML client. */
+  roomId?: string;
+  hostToken?: string;
+  guestToken?: string;
 }
 
 function tttEmpty(): TttCell[] {
