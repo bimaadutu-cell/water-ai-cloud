@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   api,
   useApi,
@@ -45,6 +45,12 @@ export default function LogsPage() {
   qs.set("page", String(page));
   const { data, loading, error, reload } = useApi<LogsData>(`/dashboard/logs?${qs.toString()}`, [level, applied, page]);
 
+  useEffect(() => {
+    if (page !== 1) return;
+    const timer = window.setInterval(() => reload(), 2000);
+    return () => window.clearInterval(timer);
+  }, [page, reload]);
+
   const doSearch = () => {
     setApplied(search);
     setPage(1);
@@ -55,7 +61,7 @@ export default function LogsPage() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="font-display text-lg font-bold text-white">Logs</h2>
-          <p className="text-xs text-slate-500">Log real dari backend — auth, bot lifecycle, command, API, webhook.</p>
+          <p className="text-xs text-slate-500">Log real dari backend — auth, bot lifecycle, pesan masuk, command, API, webhook. Live refresh 2 detik.</p>
         </div>
         <div className="flex gap-2">
           <input

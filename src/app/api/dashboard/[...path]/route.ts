@@ -521,9 +521,11 @@ async function waDetail(user: User, botId: string) {
 async function listLogs(user: User, url: URL) {
   const level = url.searchParams.get("level");
   const search = url.searchParams.get("search");
+  const botId = url.searchParams.get("botId");
   const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10));
   const limit = 50;
   const conds = [eq(logs.userId, user.id)];
+  if (botId) conds.push(eq(logs.botId, botId));
   if (level && level !== "all") conds.push(eq(logs.level, level));
   if (search) conds.push(like(sql`coalesce(${logs.event}, '') || ${logs.message}`, `%${search}%`));
   const [rows, totalRes] = await Promise.all([
@@ -644,7 +646,9 @@ async function createBot(user: User, body: any) {
       description: body?.description ? String(body.description).slice(0, 500) : null,
     })
     .returning();
+  await addLog({ userId: user.id, botId: bot.id, level: "info", event: "bot.create.started", message: `Provisioning bot ${name} · database record siap` }).catch(() => {});
   await db.insert(whatsappSessions).values({ botId: bot.id, status: "disconnected" });
+  await addLog({ userId: user.id, botId: bot.id, level: "info", event: "bot.create.session", message: "WhatsApp session dibuat · status disconnected" }).catch(() => {});
   // Seed the full WATER AI registry — every command becomes a real DB row
   // that the user can enable/disable per bot (menu is generated from it).
   for (const c of REGISTRY) {
@@ -659,7 +663,8 @@ async function createBot(user: User, body: any) {
       premium: !!c.premium,
     });
   }
-  await addLog({ userId: user.id, botId: bot.id, level: "success", event: "bot.create", message: `Bot ${name} dibuat` });
+  await addLog({ userId: user.id, botId: bot.id, level: "info", event: "bot.create.registry", message: `Command registry ditanam: ${REGISTRY.length} command` }).catch(() => {});
+  await addLog({ userId: user.id, botId: bot.id, level: "success", event: "bot.create", message: `Bot ${name} berhasil dibuat dan siap dihubungkan` });
   notify(user.id, "bot.created", "Bot baru dibuat", `${name} siap dihubungkan ke WhatsApp.`);
   return Response.json({ success: true, data: bot }, { status: 201 });
 }

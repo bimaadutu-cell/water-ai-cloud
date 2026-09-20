@@ -47,6 +47,9 @@ function BotsInner() {
   const [renaming, setRenaming] = useState<Bot | null>(null);
   const [configuring, setConfiguring] = useState<Bot | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [createStage, setCreateStage] = useState<"form" | "terminal">("form");
+  const [terminalBotId, setTerminalBotId] = useState<string | null>(null);
+  const [terminalLines, setTerminalLines] = useState<string[]>([]);
 
   const [form, setForm] = useState({ name: "", prefix: "!", ownerNumber: "", description: "" });
   const [newName, setNewName] = useState("");
@@ -57,6 +60,33 @@ function BotsInner() {
     window.addEventListener("wac:refresh", fn);
     return () => window.removeEventListener("wac:refresh", fn);
   }, [reload]);
+
+  useEffect(() => {
+    if (!terminalBotId) return;
+    let alive = true;
+    const loadTerminal = async () => {
+      try {
+        const data = await api<{ logs: Array<{ event: string; message: string; level: string; createdAt: string }> }>(
+          `/dashboard/logs?botId=${encodeURIComponent(terminalBotId)}&page=1`
+        );
+        if (!alive) return;
+        const rows = [...(data.logs ?? [])].reverse();
+        setTerminalLines(rows.map((l) => {
+          const time = new Date(l.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+          const prefix = l.level === "error" ? "ERR" : l.level === "success" ? " OK" : "LOG";
+          return `[${time}] ${prefix} ${l.event} :: ${l.message}`;
+        }));
+      } catch {
+        /* terminal polling is best-effort */
+      }
+    };
+    loadTerminal();
+    const timer = window.setInterval(loadTerminal, 1000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [terminalBotId]);
 
   const act = async (b: Bot, action: string) => {
     setBusy(`${b.id}:${action}`);
@@ -72,17 +102,45 @@ function BotsInner() {
   };
 
   const createBot = async () => {
+    if (!form.name.trim()) {
+      toast("Nama bot wajib diisi", undefined, "err");
+      return;
+    }
     setBusy("create");
+    setCreateStage("terminal");
+    setTerminalBotId(null);
+    setTerminalLines([
+      "$ water-ai create-bot --runtime node",
+      "[....] Memvalidasi konfigurasi bot...",
+      "[....] Menghubungkan ke database..."
+    ]);
     try {
-      await api("/dashboard/bots", "POST", form);
-      toast("Bot dibuat", "Start bot lalu hubungkan WhatsApp di halaman WhatsApp.");
-      setCreateOpen(false);
+      const created = await api<{ id: string; name: string }>("/dashboard/bots", "POST", form);
+      setTerminalBotId(created.id);
+      setTerminalLines((lines) => [
+        ...lines,
+        `[ OK ] Bot ${created.name} dibuat · id=${created.id}`,
+        "[....] Mengambil log provisioning backend..."
+      ]);
+      toast("Bot berhasil dibuat", "Terminal menampilkan proses backend secara live.");
       setForm({ name: "", prefix: "!", ownerNumber: "", description: "" });
       reload();
     } catch (e: any) {
+      setTerminalLines((lines) => [
+        ...lines,
+        `[ERR] ${e?.message ?? "Gagal membuat bot"}`
+      ]);
       toast(e.message, undefined, "err");
+    } finally {
       setBusy(null);
     }
+  };
+
+  const closeCreate = () => {
+    setCreateOpen(false);
+    setCreateStage("form");
+    setTerminalBotId(null);
+    setTerminalLines([]);
   };
 
   const removeBot = async () => {
@@ -271,35 +329,59 @@ function BotsInner() {
         </>
       )}
 
-      {/* create modal */}
-      <Modal open={createOpen} onClose={() => setCreateOpen(false)} title="Create Bot">
-        <div className="space-y-4">
-          <Field label="Bot Name">
-            <input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="waterbot-01" maxLength={64} />
-          </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Runtime">
-              <select className="input" value="node" disabled>
-                <option value="node">Node.js (Baileys)</option>
-              </select>
+      {/* create modal + live backend terminal */}
+      <Modal open={createOpen} onClose={closeCreate} title={createStage === "terminal" ? "Create Bot · Terminal" : "Create Bot"}>
+        {createStage === "form" ? (
+          <div className="space-y-4">
+            <Field label="Bot Name">
+              <input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="waterbot-01" maxLength={64} />
             </Field>
-            <Field label="Prefix">
-              <input className="input" value={form.prefix} onChange={(e) => setForm({ ...form, prefix: e.target.value })} maxLength={4} placeholder="!" />
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Runtime">
+                <select className="input" value="node" disabled>
+                  <option value="node">Node.js (Baileys)</option>
+                </select>
+              </Field>
+              <Field label="Prefix">
+                <input className="input" value={form.prefix} onChange={(e) => setForm({ ...form, prefix: e.target.value })} maxLength={4} placeholder="!" />
+              </Field>
+            </div>
+            <Field label="Owner Number" hint="Nomor WhatsApp owner (format 62xxx).">
+              <input className="input" value={form.ownerNumber} onChange={(e) => setForm({ ...form, ownerNumber: e.target.value })} placeholder="6281234567890" />
             </Field>
+            <Field label="Description">
+              <textarea className="input min-h-16" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Deskripsi singkat (opsional)" />
+            </Field>
+            <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-3 py-2.5 text-[11px] text-cyan-200">
+              Command default (menu, help, ping, owner, runtime, status, info) akan dibuat otomatis.
+            </div>
+            <Button className="w-full !py-2.5" loading={busy === "create"} onClick={createBot}>
+              Buat Bot
+            </Button>
           </div>
-          <Field label="Owner Number" hint="Nomor WhatsApp owner (format 62xxx).">
-            <input className="input" value={form.ownerNumber} onChange={(e) => setForm({ ...form, ownerNumber: e.target.value })} placeholder="6281234567890" />
-          </Field>
-          <Field label="Description">
-            <textarea className="input min-h-16" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Deskripsi singkat (opsional)" />
-          </Field>
-          <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 px-3 py-2.5 text-[11px] text-cyan-200">
-            Command default (menu, help, ping, owner, runtime, status, info) akan dibuat otomatis.
+        ) : (
+          <div className="space-y-3">
+            <div className="overflow-hidden rounded-xl border border-emerald-400/15 bg-black/70 shadow-inner">
+              <div className="flex items-center gap-2 border-b border-white/5 px-3 py-2 font-mono text-[10px] text-slate-500">
+                <span className="h-2 w-2 rounded-full bg-red-400/70" />
+                <span className="h-2 w-2 rounded-full bg-amber-400/70" />
+                <span className="h-2 w-2 rounded-full bg-emerald-400/70" />
+                <span className="ml-1">WATER AI BOT TERMINAL</span>
+              </div>
+              <pre className="max-h-72 min-h-52 overflow-auto whitespace-pre-wrap p-3 font-mono text-[10px] leading-5 text-emerald-300">
+                {(terminalLines.length ? terminalLines : ["Menunggu output backend..."]).join("\n")}
+                {"\n"}<span className="text-emerald-500/60">▌</span>
+              </pre>
+            </div>
+            <p className="text-[10px] text-slate-500">
+              Terminal mengambil event provisioning asli dari backend. Setelah bot dibuat, log pesan masuk juga muncul di halaman Logs.
+            </p>
+            <div className="flex gap-2">
+              <Button variant="ghost" className="flex-1" onClick={closeCreate}>Tutup</Button>
+              <Button className="flex-1" onClick={() => { closeCreate(); setTimeout(() => setCreateOpen(true), 0); }}>Buat Bot Lagi</Button>
+            </div>
           </div>
-          <Button className="w-full !py-2.5" loading={busy === "create"} onClick={createBot}>
-            Buat Bot
-          </Button>
-        </div>
+        )}
       </Modal>
 
       {/* delete confirm */}

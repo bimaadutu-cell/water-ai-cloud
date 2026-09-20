@@ -103,8 +103,8 @@ function finishGame(result){
   overlay.classList.add("show");
 }
 function makeMove(index,player){
-  if(!gameActive||botThinking||board[index]!==""||player!==currentPlayer)return false;
-  board[index]=player;paint();
+  if(!gameActive||board[index]!==""||player!==currentPlayer||(botThinking&&player!=="O"))return false;
+  board[index]=player;if(player==="O")botThinking=false;paint();
   const result=checkWinner();if(result){finishGame(result);return true}
   currentPlayer=currentPlayer==="X"?"O":"X";updateStatus();
   if(AI_MODE&&currentPlayer==="O")setTimeout(aiMove,10);
