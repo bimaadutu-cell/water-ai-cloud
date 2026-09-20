@@ -11,6 +11,8 @@ export type GameRoom = {
   guestJid?: string;
   hostPhone?: string;
   guestPhone?: string;
+  hostToken: string;
+  guestToken?: string;
   status: "waiting" | "active" | "done";
   // chess: fen-like simple board snapshot as JSON
   state: any;
@@ -25,6 +27,10 @@ function rid() {
   return Math.random().toString(36).slice(2, 8).toUpperCase();
 }
 
+function token() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+}
+
 export function createRoom(kind: GameKind, hostJid: string, initialState: any): GameRoom {
   const id = rid();
   const room: GameRoom = {
@@ -33,6 +39,7 @@ export function createRoom(kind: GameKind, hostJid: string, initialState: any): 
     hostJid,
     status: "waiting",
     state: initialState,
+    hostToken: token(),
     turn: kind === "chess" ? "w" : "X",
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -67,7 +74,8 @@ export function inviteGuest(roomId: string, guestPhone: string): { ok: boolean; 
   if (!jid) return { ok: false, error: "Nomor tidak valid. Contoh: 62812xxxxxxx atau 0812xxxxxxx" };
   room.guestJid = jid;
   room.guestPhone = guestPhone;
-  room.status = "active";
+  room.guestToken = token();
+  room.status = "waiting";
   room.updatedAt = Date.now();
   rooms.set(room.id, room);
   return { ok: true, room, guestJid: jid };
@@ -77,6 +85,7 @@ export function acceptRoom(roomId: string, guestJid: string): { ok: boolean; roo
   const room = getRoom(roomId);
   if (!room) return { ok: false, error: "Room tidak ditemukan" };
   room.guestJid = guestJid;
+  if (!room.guestToken) room.guestToken = token();
   room.status = "active";
   room.updatedAt = Date.now();
   rooms.set(room.id, room);
@@ -99,4 +108,21 @@ export function endRoom(roomId: string) {
     room.status = "done";
     room.updatedAt = Date.now();
   }
+}
+
+
+export function findRoomByPlayerToken(roomId: string, playerToken: string): { room: GameRoom; side: "host" | "guest" } | null {
+  const room = getRoom(roomId);
+  if (!room || !playerToken) return null;
+  if (room.hostToken === playerToken) return { room, side: "host" };
+  if (room.guestToken && room.guestToken === playerToken) return { room, side: "guest" };
+  return null;
+}
+
+export function touchRoom(roomId: string) {
+  const room = getRoom(roomId);
+  if (!room) return null;
+  room.updatedAt = Date.now();
+  rooms.set(room.id, room);
+  return room;
 }

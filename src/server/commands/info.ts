@@ -24,6 +24,10 @@ import {
   safeFetch,
 } from "./core";
 import { getGame, delGame, setGame } from "./state";
+import { APP_URL } from "@/server/lib";
+import { createRoom, inviteGuest, acceptRoom, getRoom } from "../games/game-rooms";
+import { createChessState } from "../games/chess-engine";
+import { createTttState } from "../games/tictactoe-engine";
 
 /* ------------------------------ math parser ----------------------------- */
 export function evalMath(expr: string): number {
@@ -1009,6 +1013,13 @@ export async function chess2(ctx: CmdCtx): Promise<CmdResult> {
     const targetJid = `${d}@s.whatsapp.net`;
     const board = chessEmptyBoard();
     const gameId = randomUUID();
+    const onlineRoom = createRoom("chess", ctx.n.sender, createChessState({
+      isAi: false,
+      whitePlayer: ctx.n.sender,
+      difficulty: "hard",
+    }));
+    const invited = inviteGuest(onlineRoom.id, d);
+    if (!invited.ok || !invited.room) return { text: `❌ ${invited.error || "Gagal membuat room online"}` };
     const data = {
       board,
       turn: "w" as const,
@@ -1021,6 +1032,9 @@ export async function chess2(ctx: CmdCtx): Promise<CmdResult> {
       pendingInvite: true,
       gameId,
       hostJid: ctx.n.remoteJid,
+      roomId: onlineRoom.id,
+      hostToken: onlineRoom.hostToken,
+      guestToken: onlineRoom.guestToken,
     };
     // Store on host chat + guest chat key for accept
     setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "chess2", data, startedAt: Date.now() });
@@ -1029,26 +1043,19 @@ export async function chess2(ctx: CmdCtx): Promise<CmdResult> {
     // Send invite to guest — gambar papan (PNG) sebagai bukti visual utama,
     // HTML rich-card dikirim best-effort saja (tidak semua client WA bisa render-nya).
     try {
-      const { buildChessHtml } = await import("../games/html-board");
+      const { buildChessHtml, attachOnlineGameHtml } = await import("../games/html-board");
       const { sendRichHtmlToChat } = await import("../games/send-rich-html");
-      const html = buildChessHtml({ title: "UNDANGAN CATUR · WATER AI", mode: "pvp" });
-      sendRichHtmlToChat(ctx.sock, targetJid, html, {
-        title: "♟️ Undangan Catur",
+      const html = attachOnlineGameHtml(
+        buildChessHtml({ title: "UNDANGAN CATUR · WATER AI", mode: "pvp" }),
+        { kind: "chess", roomId: onlineRoom.id, token: onlineRoom.guestToken!, side: "guest", apiBase: `${APP_URL}/api/games` },
+      );
+      const sent = await sendRichHtmlToChat(ctx.sock, targetJid, html, {
+        title: "♟️ Undangan Catur Online",
         id: `chess-inv-${gameId.slice(0, 8)}`,
         source: "water_ai_chess_invite",
-      }).catch((e: any) => console.error("[chess2 invite] rich html", e?.message || e));
-
-      const inviteCaption =
-        `♟️ *UNDANGAN CATUR ONLINE*\n\n` +
-        `Dari: ${String(ctx.n.sender).split("@")[0].split(":")[0]}\n` +
-        `Kode: ${gameId.slice(0, 8)}\n\n` +
-        `Ketik *.chess2 accept* atau *.chess2 terima* untuk bergabung.\n` +
-        `Setelah terima, gerakan real-time lewat bot (kedua pemain dapat update papan).`;
-      const img = await chessBoardImage(board, "w", null, [], undefined, "Menunggu lawan menerima undangan.", "Undangan catur");
-      if (img) {
-        await ctx.sock.sendMessage(targetJid, { image: img, caption: inviteCaption });
-      } else {
-        await ctx.sock.sendMessage(targetJid, { text: inviteCaption });
+      });
+      if (!sent.ok) {
+        await ctx.sock.sendMessage(targetJid, { text: `♟️ Undangan Catur Online\n\nDari: ${String(ctx.n.sender).split("@")[0].split(":")[0]}\nKetik *.chess2 terima* untuk mulai.\n\nMedia HTML gagal dikirim: ${sent.error || "client tidak mendukung Rich HTML"}` });
       }
     } catch (e: any) {
       console.error("[chess2 invite]", e?.message || e);
@@ -1083,29 +1090,26 @@ export async function chess2(ctx: CmdCtx): Promise<CmdResult> {
     g.pendingInvite = false;
     g.blackPlayerJid = ctx.n.sender;
     const hostKey = g.hostJid || ctx.n.remoteJid;
+    const onlineRoom = g.roomId ? getRoom(g.roomId) : null;
+    if (!onlineRoom) return { text: "❌ Room online sudah tidak tersedia. Buat undangan baru." };
+    const accepted = acceptRoom(onlineRoom.id, ctx.n.sender);
+    if (!accepted.ok || !accepted.room?.guestToken) return { text: "❌ Gagal mengaktifkan room online." };
     setGame(ctx.bot.id, hostKey, { kind: "chess2", data: g, startedAt: Date.now() });
     setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "chess2", data: g, startedAt: Date.now() });
     try {
-      const { buildChessHtml } = await import("../games/html-board");
+      const { buildChessHtml, attachOnlineGameHtml } = await import("../games/html-board");
       const { sendRichHtmlToChat } = await import("../games/send-rich-html");
-      const html = buildChessHtml({ title: "CATUR ONLINE · WATER AI", mode: "pvp" });
-      sendRichHtmlToChat(ctx.sock, hostKey, html, { title: "♟️ Catur Online", id: `chess-on-${Date.now().toString(36)}`, source: "water_ai_chess" })
-        .catch((e: any) => console.error("[chess2 accept] rich html host", e?.message || e));
-      sendRichHtmlToChat(ctx.sock, ctx.n.remoteJid, html, { title: "♟️ Catur Online", id: `chess-on-${Date.now().toString(36)}`, source: "water_ai_chess" })
-        .catch((e: any) => console.error("[chess2 accept] rich html guest", e?.message || e));
-
-      const img = await chessBoardImage(g.board, g.turn || "w", null, [], undefined, "Putih mulai duluan.", "Catur online dimulai");
-      const startCaption = `✅ Lawan bergabung sebagai Hitam! Mulai bermain.\nPutih mulai — ketik \`.chess2 e2e4\`.`;
-      if (img) {
-        await ctx.sock.sendMessage(hostKey, { image: img, caption: startCaption });
-      } else {
-        await ctx.sock.sendMessage(hostKey, { text: startCaption });
-      }
+      const baseHtml = buildChessHtml({ title: "CATUR ONLINE · WATER AI", mode: "pvp" });
+      const hostHtml = attachOnlineGameHtml(baseHtml, { kind: "chess", roomId: accepted.room.id, token: accepted.room.hostToken, side: "host", apiBase: `${APP_URL}/api/games` });
+      const guestHtml = attachOnlineGameHtml(baseHtml, { kind: "chess", roomId: accepted.room.id, token: accepted.room.guestToken, side: "guest", apiBase: `${APP_URL}/api/games` });
+      const hostSent = await sendRichHtmlToChat(ctx.sock, hostKey, hostHtml, { title: "♟️ Catur Online", id: `chess-on-host-${Date.now().toString(36)}`, source: "water_ai_chess" });
+      const guestSent = await sendRichHtmlToChat(ctx.sock, ctx.n.remoteJid, guestHtml, { title: "♟️ Catur Online", id: `chess-on-guest-${Date.now().toString(36)}`, source: "water_ai_chess" });
+      if (!hostSent.ok || !guestSent.ok) console.error("[chess2 accept] rich html host/guest", hostSent.error, guestSent.error);
     } catch (e: any) {
       console.error("[chess2 accept]", e?.message || e);
     }
     return {
-      text: `✅ Kamu bergabung sebagai Hitam!\nGambar papan sudah dikirim ke kedua pemain.\nPutih mulai — ketik \`.chess2 e2e4\` atau main di HTML.`,
+      text: `✅ Kamu bergabung sebagai Hitam!\n🎮 Media HTML online dikirim ke kedua HP.\nPutih mulai — tap bidak di media untuk bermain real-time.`,
       buttons: CHESS_BTNS,
     };
   }
@@ -1897,6 +1901,9 @@ export async function tictactoe(ctx: CmdCtx): Promise<CmdResult> {
     if (targetNum === selfNum) return { text: "❌ Tidak bisa mengundang diri sendiri." };
 
     const gameId = randomUUID();
+    const onlineRoom = createRoom("ttt", ctx.n.sender, createTttState({ isAi: false, playerX: ctx.n.sender }));
+    const invited = inviteGuest(onlineRoom.id, target.split("@")[0]);
+    if (!invited.ok || !invited.room) return { text: `❌ ${invited.error || "Gagal membuat room online"}` };
     st = {
       board: tttEmpty(),
       turn: "X",
@@ -1911,29 +1918,27 @@ export async function tictactoe(ctx: CmdCtx): Promise<CmdResult> {
       hostJid: ctx.n.sender,
       hostChat: ctx.n.remoteJid,
       gameId,
+      roomId: onlineRoom.id,
+      hostToken: onlineRoom.hostToken,
+      guestToken: onlineRoom.guestToken,
     };
     setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "tictactoe", data: st, startedAt: Date.now() });
     setGame(ctx.bot.id, target, { kind: "tictactoe", data: { ...st }, startedAt: Date.now() });
 
     try {
-      const { buildTttHtml } = await import("../games/html-board");
+      const { buildTttHtml, attachOnlineGameHtml } = await import("../games/html-board");
       const { sendRichHtmlToChat } = await import("../games/send-rich-html");
-      const html = buildTttHtml({ title: "UNDANGAN TTT · WATER AI", mode: "pvp" });
-      sendRichHtmlToChat(ctx.sock, target, html, {
-        title: "🎮 Undangan TTT",
+      const html = attachOnlineGameHtml(
+        buildTttHtml({ title: "UNDANGAN TTT · WATER AI", mode: "pvp" }),
+        { kind: "ttt", roomId: onlineRoom.id, token: onlineRoom.guestToken!, side: "guest", apiBase: `${APP_URL}/api/games` },
+      );
+      const sent = await sendRichHtmlToChat(ctx.sock, target, html, {
+        title: "🎮 Undangan TTT Online",
         id: `ttt-inv-${gameId.slice(0, 8)}`,
         source: "water_ai_ttt_invite",
-      }).catch((e: any) => console.error("[ttt invite] rich html", e?.message || e));
-
-      const inviteCaption =
-        `🎮 *UNDANGAN TIC-TAC-TOE ONLINE*\n\n` +
-        `Dari: ${selfNum}\nKode: ${gameId.slice(0, 8)}\n\n` +
-        `Ketik *.ttt terima* untuk bergabung.`;
-      const img = await tttBoardImage(st!);
-      if (img) {
-        await ctx.sock.sendMessage(target, { image: img, caption: inviteCaption });
-      } else {
-        await ctx.sock.sendMessage(target, { text: inviteCaption });
+      });
+      if (!sent.ok) {
+        await ctx.sock.sendMessage(target, { text: `🎮 Undangan Tic-Tac-Toe Online\n\nDari: ${selfNum}\nKetik *.ttt terima* untuk bergabung.\n\nMedia HTML gagal dikirim: ${sent.error || "client tidak mendukung Rich HTML"}` });
       }
     } catch (e: any) {
       console.error("[ttt invite]", e?.message || e);
@@ -1957,8 +1962,23 @@ export async function tictactoe(ctx: CmdCtx): Promise<CmdResult> {
     st.pendingInviteJid = undefined;
     st.mode = "pvp";
     st.turn = "X";
+    const onlineRoom = st.roomId ? getRoom(st.roomId) : null;
+    if (!onlineRoom) return { text: "❌ Room online sudah tidak tersedia. Buat undangan baru." };
+    const accepted = acceptRoom(onlineRoom.id, ctx.n.sender);
+    if (!accepted.ok || !accepted.room?.guestToken) return { text: "❌ Gagal mengaktifkan room online." };
     setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "tictactoe", data: st, startedAt: Date.now() });
-    return tttResponse(ctx, st, `✅ ${tttTag(ctx.n.sender)} bergabung sebagai *O*!\n${tttTag(st.playerXJid)} (X) mulai dulu.`);
+    try {
+      const { buildTttHtml, attachOnlineGameHtml } = await import("../games/html-board");
+      const { sendRichHtmlToChat } = await import("../games/send-rich-html");
+      const baseHtml = buildTttHtml({ title: "TIC-TAC-TOE ONLINE · WATER AI", mode: "pvp" });
+      const hostHtml = attachOnlineGameHtml(baseHtml, { kind: "ttt", roomId: accepted.room.id, token: accepted.room.hostToken, side: "host", apiBase: `${APP_URL}/api/games` });
+      const guestHtml = attachOnlineGameHtml(baseHtml, { kind: "ttt", roomId: accepted.room.id, token: accepted.room.guestToken, side: "guest", apiBase: `${APP_URL}/api/games` });
+      await sendRichHtmlToChat(ctx.sock, st.hostChat || ctx.n.remoteJid, hostHtml, { title: "🎮 Tic-Tac-Toe Online", id: `ttt-on-host-${Date.now().toString(36)}`, source: "water_ai_ttt" });
+      await sendRichHtmlToChat(ctx.sock, ctx.n.remoteJid, guestHtml, { title: "🎮 Tic-Tac-Toe Online", id: `ttt-on-guest-${Date.now().toString(36)}`, source: "water_ai_ttt" });
+      return { text: `✅ ${tttTag(ctx.n.sender)} bergabung sebagai *O*!\n${tttTag(st.playerXJid)} (X) mulai dulu.\n\n🎮 Media HTML online sudah dikirim ke kedua HP. Tap kotak di media untuk bermain real-time.` };
+    } catch (e:any) {
+      return { text: `⚠️ ${tttTag(ctx.n.sender)} bergabung, tetapi media HTML online gagal dikirim: ${e?.message || e}` };
+    }
   }
 
   if (arg === "tolak" || arg === "reject" || arg === "no") {
