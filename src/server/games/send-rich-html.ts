@@ -53,13 +53,16 @@ export async function sendRichHtmlToChat(
   const title = opts?.title || "WATER AI GAME";
   const id = opts?.id || randomId("game");
   const source = opts?.source || "water_ai_game";
+  // The Rich HTML primitive accepts an HTML fragment containing styles/scripts.
+  // This is the safest form for WhatsApp's embedded renderer: the renderer
+  // supplies its own document shell. We still keep a complete-document
+  // fallback below for forks that require it.
   const full = ensureFullHtml(html, title);
   const fragment = toRichHtmlFragment(full);
 
-  // The Chess CAP page loads this audio URL. Rich WebView network access is
-  // sandboxed, so explicitly trust the host used by the page.
+  const appUrl = process.env.APP_URL || "";
   const appTrusted = (() => {
-    try { return process.env.APP_URL ? new URL(process.env.APP_URL).hostname : null; } catch { return null; }
+    try { return appUrl ? new URL(appUrl).hostname : null; } catch { return null; }
   })();
   const trustedSources = Array.from(new Set([
     ...(opts?.trustedSources || []),
@@ -68,7 +71,7 @@ export async function sendRichHtmlToChat(
   ]));
   const errors: string[] = [];
 
-  // 1. Preferred API: @stazyu/baileys GenAI HTML primitive.
+  // 1) Preferred: object form documented by @stazyu/baileys.
   if (typeof sock.sendRichHtml === "function") {
     try {
       await sock.sendRichHtml(jid, {
@@ -77,15 +80,31 @@ export async function sendRichHtmlToChat(
         html: fragment,
         source,
         trustedSources,
+        ...(appUrl ? { url: appUrl } : {}),
       });
       return { ok: true, method: "sock.sendRichHtml(fragment)" };
     } catch (e: any) {
-      errors.push(`sock.sendRichHtml: ${String(e?.message || e).slice(0, 160)}`);
+      errors.push(`sock.sendRichHtml(object): ${String(e?.message || e).slice(0, 240)}`);
+    }
+
+    // 2) Raw-string overload. This is also documented by the package and
+    // keeps the original HTML untouched.
+    try {
+      await sock.sendRichHtml(jid, fragment, undefined, {
+        title,
+        source,
+        trustedSources,
+        ...(appUrl ? { url: appUrl } : {}),
+      });
+      return { ok: true, method: "sock.sendRichHtml(raw-fragment)" };
+    } catch (e: any) {
+      errors.push(`sock.sendRichHtml(raw): ${String(e?.message || e).slice(0, 240)}`);
     }
   }
 
-  // 2. Package-level helper. Keep the exact same fragment and trusted host.
   const mod = loadBaileys();
+
+  // 3) Package-level helper with the same full document.
   if (mod?.sendRichHtml) {
     try {
       await mod.sendRichHtml(sock, jid, {
@@ -94,41 +113,41 @@ export async function sendRichHtmlToChat(
         html: fragment,
         source,
         trustedSources,
+        ...(appUrl ? { url: appUrl } : {}),
       });
       return { ok: true, method: "mod.sendRichHtml(fragment)" };
     } catch (e: any) {
-      errors.push(`mod.sendRichHtml: ${String(e?.message || e).slice(0, 160)}`);
+      errors.push(`mod.sendRichHtml: ${String(e?.message || e).slice(0, 240)}`);
     }
   }
 
-  // 3. Some compatible forks expose the same renderer as sendInlineWebUI.
+  // 4) Compatible inline-WebUI fallback.
   if (mod?.sendInlineWebUI) {
     try {
-      await mod.sendInlineWebUI(sock, jid, fragment, title, {
-        trustedSources,
-      });
-      return { ok: true, method: "sendInlineWebUI(fragment)" };
+      await mod.sendInlineWebUI(sock, jid, full, title, { trustedSources, ...(appUrl ? { url: appUrl } : {}) });
+      return { ok: true, method: "sendInlineWebUI(full-document)" };
     } catch (e: any) {
-      errors.push(`sendInlineWebUI: ${String(e?.message || e).slice(0, 160)}`);
+      errors.push(`sendInlineWebUI: ${String(e?.message || e).slice(0, 240)}`);
     }
   }
 
-  // 4. Last rich-builder fallback, if the installed fork exports it.
+  // 5) Low-level composer fallback.
   if (typeof mod?.generateRichHtmlContent === "function") {
     try {
       const content = mod.generateRichHtmlContent({
         id,
         title,
-        html: fragment,
+        html: full,
         source,
         trustedSources,
+        ...(appUrl ? { url: appUrl } : {}),
       });
       if (content) {
         const sent = await sock.sendMessage(jid, content);
-        if (sent?.key?.id) return { ok: true, method: "generateRichHtmlContent" };
+        if (sent?.key?.id) return { ok: true, method: "generateRichHtmlContent(full-document)" };
       }
     } catch (e: any) {
-      errors.push(`generateRichHtmlContent: ${String(e?.message || e).slice(0, 160)}`);
+      errors.push(`generateRichHtmlContent: ${String(e?.message || e).slice(0, 240)}`);
     }
   }
 

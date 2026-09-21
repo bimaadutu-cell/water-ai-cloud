@@ -61,6 +61,7 @@ const H: Record<string, Handler> = {
 
   /* 🎮 FUN */
   chess3: info.chess3,
+  chess4: info.chess4,
   tictactoe: info.tictactoe,
   ttt: info.ttt,
   tictac: info.tictac,

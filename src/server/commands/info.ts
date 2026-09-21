@@ -2101,6 +2101,1131 @@ export const ttt = tictactoe;
 export const tictac = tictactoe;
 
 /* ============================== ALL GAMES (Poki-style hub) ============================== */
+
+export async function chess4(ctx: CmdCtx): Promise<CmdResult> {
+  const arg = (ctx.arg || "").trim().toLowerCase();
+  const requestedDifficulty = /^(easy|normal|hard)$/.test(arg) ? (arg as "easy" | "normal" | "hard") : null;
+  const existing = getGame(ctx.bot.id, ctx.n.remoteJid, "chess4");
+
+  // HTML offline opsional — game utama tetap gambar + tombol di bubble
+  if (arg === "html" || arg === "web" || arg === "canvas") {
+    try {
+      const { buildChessHtml } = await import("../games/html-board");
+      const html = buildChessHtml({ title: "CHESS REALTIME · WATER AI" });
+      return {
+        text: "📦 Paket HTML offline opsional. Game utama: papan di bubble chat.",
+        media: {
+          kind: "document" as const,
+          buffer: Buffer.from(html, "utf8"),
+          filename: "chess-water-ai.html",
+          mimetype: "text/html",
+          caption: "Chess HTML offline",
+        },
+      };
+    } catch (e: any) {
+      return { text: `❌ Gagal membuat HTML chess: ${e?.message ?? e}` };
+    }
+  }
+
+  // Multiplayer undang teman by phone (private + grup)
+  const chessInvite = arg.match(/^(undang|invite)\s+(.+)$/i);
+  if (chessInvite) {
+    const mNum = chessInvite[2].match(/(?:@)?(\d{8,15})/);
+    if (!mNum) return { text: "Format: `.chess4 invite 0812xxxxxxx` atau `.chess4 undang 62812xxxxxxx`" };
+    let d = mNum[1];
+    if (d.startsWith("0")) d = "62" + d.slice(1);
+    if (d.startsWith("8") && d.length <= 13) d = "62" + d;
+    const targetJid = `${d}@s.whatsapp.net`;
+    const board = chessEmptyBoard();
+    const gameId = randomUUID();
+    const onlineRoom = createRoom("chess", ctx.n.sender, createChessState({
+      isAi: false,
+      whitePlayer: ctx.n.sender,
+      difficulty: "hard",
+    }));
+    const invited = inviteGuest(onlineRoom.id, d);
+    if (!invited.ok || !invited.room) return { text: `❌ ${invited.error || "Gagal membuat room online"}` };
+    const data = {
+      board,
+      turn: "w" as const,
+      history: [] as string[],
+      selected: null as string | null,
+      targets: [] as string[],
+      playerJid: ctx.n.sender,
+      opponentJid: targetJid,
+      mode: "pvp" as const,
+      pendingInvite: true,
+      gameId,
+      hostJid: ctx.n.remoteJid,
+      roomId: onlineRoom.id,
+      hostToken: onlineRoom.hostToken,
+      guestToken: onlineRoom.guestToken,
+    };
+    // Store on host chat + guest chat key for accept
+    setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "chess4", data, startedAt: Date.now() });
+    setGame(ctx.bot.id, targetJid, { kind: "chess4", data: { ...data, pendingInvite: true }, startedAt: Date.now() });
+
+    // Send invite to guest — gambar papan (PNG) sebagai bukti visual utama,
+    // HTML rich-card dikirim best-effort saja (tidak semua client WA bisa render-nya).
+    try {
+      const { buildChessHtml, attachOnlineGameHtml } = await import("../games/html-board");
+      const { sendRichHtmlToChat } = await import("../games/send-rich-html");
+      const html = attachOnlineGameHtml(
+        buildChessHtml({ title: "UNDANGAN CATUR · WATER AI", mode: "pvp" }),
+        { kind: "chess", roomId: onlineRoom.id, token: onlineRoom.guestToken!, side: "guest", apiBase: `${APP_URL}/api/games` },
+      );
+      const sent = await sendRichHtmlToChat(ctx.sock, targetJid, html, {
+        title: "♟️ Undangan Catur Online",
+        id: `chess-inv-${gameId.slice(0, 8)}`,
+        source: "water_ai_chess_invite",
+      });
+      if (!sent.ok) {
+        await ctx.sock.sendMessage(targetJid, { text: `♟️ Undangan Catur Online\n\nDari: ${String(ctx.n.sender).split("@")[0].split(":")[0]}\nKetik *.chess4 terima* untuk mulai.\n\nMedia HTML gagal dikirim: ${sent.error || "client tidak mendukung Rich HTML"}` });
+      }
+    } catch (e: any) {
+      console.error("[chess4 invite]", e?.message || e);
+    }
+
+    return {
+      text:
+        `♟️ *UNDANGAN TERKIRIM*\n\n` +
+        `Host (Putih): kamu\n` +
+        `Lawan (Hitam): ${d}\n` +
+        `Kode: ${gameId.slice(0, 8)}\n\n` +
+        `Media HTML undangan sudah dikirim ke nomor lawan.\n` +
+        `Lawan ketik *.chess4 terima* untuk mulai.\n` +
+        `_Sinkron real-time lewat bot (bukan simulasi lokal)._`,
+      buttons: [
+        { id: "CHESS_NEW", text: "GAME BARU" },
+      ],
+    };
+  }
+
+  if (arg === "terima" || arg === "accept") {
+    const g = existing?.kind === "chess4" ? (existing.data as any) : null;
+    if (!g?.pendingInvite || !g?.opponentJid) return { text: "Tidak ada undangan catur aktif. Minta host: `.chess4 invite 08xxx`" };
+    const inv = String(g.opponentJid).split("@")[0].split(":")[0];
+    const me = String(ctx.n.sender).split("@")[0].split(":")[0];
+    if (inv !== me && String(g.opponentJid) !== ctx.n.sender && String(g.opponentJid) !== ctx.n.remoteJid) {
+      // allow accept on guest jid chat
+      if (String(ctx.n.remoteJid).split("@")[0] !== inv) {
+        return { text: "⛔ Undangan ini bukan untuk kamu." };
+      }
+    }
+    g.pendingInvite = false;
+    g.blackPlayerJid = ctx.n.sender;
+    const hostKey = g.hostJid || ctx.n.remoteJid;
+    const onlineRoom = g.roomId ? getRoom(g.roomId) : null;
+    if (!onlineRoom) return { text: "❌ Room online sudah tidak tersedia. Buat undangan baru." };
+    const accepted = acceptRoom(onlineRoom.id, ctx.n.sender);
+    if (!accepted.ok || !accepted.room?.guestToken) return { text: "❌ Gagal mengaktifkan room online." };
+    setGame(ctx.bot.id, hostKey, { kind: "chess4", data: g, startedAt: Date.now() });
+    setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "chess4", data: g, startedAt: Date.now() });
+    try {
+      const { buildChessHtml, attachOnlineGameHtml } = await import("../games/html-board");
+      const { sendRichHtmlToChat } = await import("../games/send-rich-html");
+      const baseHtml = buildChessHtml({ title: "CATUR ONLINE · WATER AI", mode: "pvp" });
+      const hostHtml = attachOnlineGameHtml(baseHtml, { kind: "chess", roomId: accepted.room.id, token: accepted.room.hostToken, side: "host", apiBase: `${APP_URL}/api/games` });
+      const guestHtml = attachOnlineGameHtml(baseHtml, { kind: "chess", roomId: accepted.room.id, token: accepted.room.guestToken, side: "guest", apiBase: `${APP_URL}/api/games` });
+      const hostSent = await sendRichHtmlToChat(ctx.sock, hostKey, hostHtml, { title: "♟️ Catur Online", id: `chess-on-host-${Date.now().toString(36)}`, source: "water_ai_chess" });
+      const guestSent = await sendRichHtmlToChat(ctx.sock, ctx.n.remoteJid, guestHtml, { title: "♟️ Catur Online", id: `chess-on-guest-${Date.now().toString(36)}`, source: "water_ai_chess" });
+      if (!hostSent.ok || !guestSent.ok) console.error("[chess4 accept] rich html host/guest", hostSent.error, guestSent.error);
+    } catch (e: any) {
+      console.error("[chess4 accept]", e?.message || e);
+    }
+    return {
+      text: `✅ Kamu bergabung sebagai Hitam!\n🎮 Media HTML online dikirim ke kedua HP.\nPutih mulai — tap bidak di media untuk bermain real-time.`,
+      buttons: CHESS_BTNS,
+    };
+  }
+
+  if (arg === "multi" || arg === "pvp") {
+    return {
+      text:
+        "👥 *Catur Multiplayer*\n\n" +
+        "Di grup: `.chess4 undang @628xxx`\n" +
+        "Teman: `.chess4 terima`\n" +
+        "Main lewat papan + tombol di chat (real-time bubble).",
+    };
+  }
+
+  // ---- NEW GAME ----
+  if (!arg || arg === "new" || arg === "start" || requestedDifficulty) {
+    const board = chessEmptyBoard();
+    setGame(ctx.bot.id, ctx.n.remoteJid, {
+      kind: "chess4",
+      data: { board, turn: "w", history: [], selected: null, targets: [] as string[], playerJid: ctx.n.sender, mode: "ai", difficulty: requestedDifficulty || "normal", gameId: randomUUID() },
+      startedAt: Date.now(),
+    });
+    // Kirim LIVE HTML sebagai media utama. Jika client/library tidak mendukung
+    // Rich HTML, baru fallback ke PNG agar tidak ada bubble kosong.
+    try {
+      const { buildChessHtml } = await import("../games/html-board");
+      const { sendRichHtmlToChat } = await import("../games/send-rich-html");
+      const html = buildChessHtml({
+        title: "CHESS · WATER AI",
+        status: `VS COMPUTER · ${(requestedDifficulty || "normal").toUpperCase()} · Giliran Putih · sentuh bidak di HTML`,
+        mode: "ai",
+        difficulty: requestedDifficulty || "normal",
+      });
+      const rich = await sendRichHtmlToChat(ctx.sock, ctx.n.remoteJid, html, {
+        title: "Chess · WATER AI",
+        id: `chess-${randomUUID()}`,
+        source: "water_ai_chess",
+      });
+      if (rich.ok) return { handled: true };
+      console.error("[CHESS] rich html unavailable:", rich.error);
+    } catch (e: any) {
+      console.error("[CHESS] rich html", e?.message || e);
+    }
+
+    const img = await chessBoardImage(board, "w", null, [], undefined, "Pilih bidak putih terlebih dahulu.", "Giliran kamu");
+    if (img) {
+      return {
+        buttons: CHESS_BTNS,
+        media: {
+          kind: "image" as const,
+          buffer: img,
+          mimetype: "image/png",
+          caption: "♟️ *CHESS · WATER AI*\nvs Bot · Giliran Putih\n\nFormat: `.chess4 e2e4`",
+        },
+      };
+    }
+    return {
+      text: "♟️ *CHESS · WATER AI*\nvs Bot · Giliran Putih\n" + chessRender(board, "w") + "\n\nFormat: `.chess4 e2e4`",
+      buttons: CHESS_BTNS,
+    };
+  }
+
+  // ---- RESIGN / CANCEL ----
+  if (arg === "resign" || arg === "surrender" || arg === "batal" || arg === "undo") {
+    if (arg === "undo" && existing?.kind === "chess4") {
+      // soft undo: clear selection
+      const data = existing.data as any;
+      data.selected = null;
+      data.targets = [];
+      setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "chess4", data, startedAt: Date.now() });
+      const img = await chessBoardImage(data.board, data.turn, null, [], undefined, "Pilih bidak putih terlebih dahulu.", "Giliran kamu");
+      if (img) {
+        return {
+          buttons: CHESS_BTNS,
+          media: {
+            kind: "image" as const,
+            buffer: img,
+            mimetype: "image/png",
+            caption: "↩ Langkah dibatalkan. Pilih bidak lagi.",
+          },
+        };
+      }
+    }
+    delGame(ctx.bot.id, ctx.n.remoteJid, "chess4");
+    return {
+      text: "🏳️ Game dibatalkan. Ketik *.chess4* untuk main lagi.",
+      buttons: [{ id: "CHESS_NEW", text: "GAME BARU" }],
+    };
+  }
+
+  if (!existing || existing.kind !== "chess4") {
+    return { text: `Belum ada game. Mulai: *${ctx.bot.prefix}chess4*` };
+  }
+
+  const data = existing.data as {
+    board: (string | null)[][];
+    turn: "w" | "b";
+    history: string[];
+    selected?: string | null;
+    targets?: string[];
+    playerJid?: string;
+    gameId?: string;
+  };
+
+  if (data.playerJid && data.playerJid !== ctx.n.sender) {
+    return { text: "⛔ Game Chess2 ini sedang dimainkan oleh pemain lain." };
+  }
+
+  // Single square: select piece OR destination
+  const single = arg.match(/^([a-h][1-8])$/i);
+  if (single) {
+    const sq = single[1].toLowerCase();
+    // If already selected from → treat as destination
+    if (data.selected) {
+      const from = data.selected;
+      const to = sq;
+      const result = chessTryMove(data.board, from, to, data.turn);
+      if (!result.ok) {
+        const img = await chessBoardImage(
+          data.board,
+          data.turn,
+          from,
+          data.targets || [],
+          undefined,
+          result.msg || "Langkah tidak valid",
+          "Giliran kamu"
+        );
+        if (img) {
+          return {
+            buttons: CHESS_BTNS,
+            media: {
+              kind: "image" as const,
+              buffer: img,
+              mimetype: "image/png",
+              caption: `⚠️ ${result.msg}`,
+            },
+          };
+        }
+        return { text: `⚠️ ${result.msg}\n` + chessRender(data.board, data.turn), buttons: CHESS_BTNS };
+      }
+      data.history.push(from + to);
+      data.selected = null;
+      data.targets = [];
+      data.turn = "b";
+      chessBotMove(data.board);
+      data.turn = "w";
+      setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "chess4", data, startedAt: Date.now() });
+      const img = await chessBoardImage(
+        data.board,
+        "w",
+        null,
+        [],
+        [`Gerak: ${from}${to}`, "Giliran kamu lagi"],
+        "Pilih bidak putih terlebih dahulu.",
+        "Giliran kamu"
+      );
+      if (img) {
+        return {
+          buttons: CHESS_BTNS,
+          media: {
+            kind: "image" as const,
+            buffer: img,
+            mimetype: "image/png",
+            caption: `♟️ Gerak *${from}${to}* · Bot sudah balas\nGiliran kamu — Putih`,
+          },
+        };
+      }
+      return { text: chessRender(data.board, "w"), buttons: CHESS_BTNS };
+    }
+
+    // Select origin square
+    const piece = (() => {
+      const p = parseSquare(sq);
+      return p ? data.board[p.r][p.c] : null;
+    })();
+    if (!piece || piece !== piece.toUpperCase()) {
+      const img = await chessBoardImage(data.board, data.turn, null, [], undefined, "Pilih bidak putih yang valid.", "Giliran kamu");
+      if (img) {
+        return {
+          buttons: CHESS_BTNS,
+          media: {
+            kind: "image" as const,
+            buffer: img,
+            mimetype: "image/png",
+            caption: `⚠️ Tidak ada bidak putih di *${sq}*`,
+          },
+        };
+      }
+      return { text: `⚠️ Tidak ada bidak putih di ${sq}`, buttons: CHESS_BTNS };
+    }
+    const targets = chessLegalTargets(data.board, sq, "w");
+    data.selected = sq;
+    data.targets = targets;
+    setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "chess4", data, startedAt: Date.now() });
+    const img = await chessBoardImage(
+      data.board,
+      "w",
+      sq,
+      targets,
+      undefined,
+      targets.length ? `${targets.length} langkah tersedia.` : "Tidak ada langkah legal.",
+      "Giliran kamu"
+    );
+    const targetList =
+      targets.length > 0
+        ? {
+            title: `♟️ Dari ${sq.toUpperCase()}`,
+            buttonText: "Pilih Tujuan",
+            footer: "WATER AI · CHESS LIVE",
+            sections: [
+              {
+                title: `${targets.length} langkah legal`,
+                rows: targets.slice(0, 10).map((t) => ({
+                  id: `CHESS_TO_${t}`,
+                  title: t.toUpperCase(),
+                  description: `Gerakkan ${sq.toUpperCase()} → ${t.toUpperCase()}`,
+                })),
+              },
+            ],
+          }
+        : undefined;
+
+    if (img) {
+      return {
+        text:
+          `Kotak *${sq}* dipilih\n` +
+          (targets.length
+            ? `${targets.length} langkah tersedia.\nTekan *Pilih Tujuan* di bawah.`
+            : "Tidak ada langkah tersedia."),
+        buttons: CHESS_BTNS,
+        list: targetList,
+        media: {
+          kind: "image" as const,
+          buffer: img,
+          mimetype: "image/png",
+          caption:
+            `Kotak *${sq}* dipilih\n` +
+            (targets.length
+              ? `${targets.length} langkah tersedia.\nTekan *Pilih Tujuan* 👇`
+              : "Tidak ada langkah tersedia."),
+        },
+      };
+    }
+    return {
+      text: `Kotak ${sq} dipilih · ${targets.length} langkah tersedia`,
+      buttons: CHESS_BTNS,
+      list: targetList,
+    };
+  }
+
+  // Full move e2e4
+  const m = arg.replace(/\s+/g, "").match(/^([a-h][1-8])([a-h][1-8])$/i);
+  if (!m) {
+    const img = await chessBoardImage(data.board, data.turn, data.selected || null, data.targets || []);
+    if (img) {
+      return {
+        buttons: CHESS_BTNS,
+        media: {
+          kind: "image" as const,
+          buffer: img,
+          mimetype: "image/png",
+          caption: "Format: *.chess4 e2* lalu *.chess4 e4*  atau  *.chess4 e2e4*",
+        },
+      };
+    }
+    return {
+      text: "Format gerak: *.chess4 e2e4*\n" + chessRender(data.board, data.turn),
+      buttons: CHESS_BTNS,
+    };
+  }
+
+  const result = chessTryMove(data.board, m[1], m[2], data.turn);
+  if (!result.ok) {
+    const img = await chessBoardImage(data.board, data.turn, m[1], data.targets || [], undefined, result.msg);
+    if (img) {
+      return {
+        buttons: CHESS_BTNS,
+        media: {
+          kind: "image" as const,
+          buffer: img,
+          mimetype: "image/png",
+          caption: `⚠️ ${result.msg}`,
+        },
+      };
+    }
+    return { text: `⚠️ ${result.msg}\n` + chessRender(data.board, data.turn), buttons: CHESS_BTNS };
+  }
+
+  data.history.push(m[1] + m[2]);
+  data.selected = null;
+  data.targets = [];
+  data.turn = "b";
+  chessBotMove(data.board);
+  data.turn = "w";
+  setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "chess4", data, startedAt: Date.now() });
+
+  const img = await chessBoardImage(
+    data.board,
+    "w",
+    null,
+    [],
+    [`Gerak: ${m[1]}${m[2]}`],
+    "Pilih bidak putih terlebih dahulu.",
+    "Giliran kamu"
+  );
+  if (img) {
+    return {
+      buttons: CHESS_BTNS,
+      media: {
+        kind: "image" as const,
+        buffer: img,
+        mimetype: "image/png",
+        caption: `♟️ Gerak *${m[1]}${m[2]}* · Bot sudah balas\nGiliran kamu — Putih`,
+      },
+    };
+  }
+  return { text: chessRender(data.board, "w"), buttons: CHESS_BTNS };
+}
+
+export async function answerGame(ctx: CmdCtx, text: string): Promise<CmdResult | null> {
+  const g = getGame(ctx.bot.id, ctx.n.remoteJid);
+  if (!g) return null;
+  const ans = text.trim().toLowerCase();
+  const record = (win: boolean) =>
+    db
+      .insert(gameScores)
+      .values({
+        botId: ctx.bot.id,
+        groupId: ctx.n.remoteJid,
+        jid: ctx.n.sender,
+        name: (ctx.raw?.pushName as string) ?? ctx.n.sender.split("@")[0],
+        wins: win ? 1 : 0,
+        total: 1,
+      })
+      .onConflictDoUpdate({
+        target: [gameScores.botId, gameScores.groupId, gameScores.jid],
+        set: { wins: sql`"wins" + ${win ? 1 : 0}`, total: sql`"total" + 1` },
+      })
+      .catch(() => {});
+
+  if (g.kind === "quiz") {
+    const letter = ans.slice(0, 1);
+    const map: Record<string, string> = {
+      a: g.data.options?.[0] ?? "",
+      b: g.data.options?.[1] ?? "",
+      c: g.data.options?.[2] ?? "",
+      d: g.data.options?.[3] ?? "",
+    };
+    if (!["a", "b", "c", "d"].includes(letter)) return null;
+    const picked = map[letter];
+    const win = picked === g.data.answer;
+    delGame(ctx.bot.id, ctx.n.remoteJid);
+    record(win);
+    return { text: (win ? "✅ Benar! Skor +1\n" : `❌ Salah. Jawaban: ${g.data.answer}\n`) + "Ketik .quiz untuk main lagi." };
+  }
+  if (g.kind === "tebakkata") {
+    if (ans === "skip") {
+      delGame(ctx.bot.id, ctx.n.remoteJid);
+      return { text: `⏭️ Skip. Jawabannya: ${g.data.word}` };
+    }
+    if (ans === g.data.word || ans.includes(g.data.word)) {
+      delGame(ctx.bot.id, ctx.n.remoteJid);
+      record(true);
+      return { text: "✅ Benar! Skor +1. Ketik .tebakkata untuk main lagi." };
+    }
+    return { text: "❌ Belum tepat, coba lagi! (atau 'skip')" };
+  }
+  if (g.kind === "tebakgambar") {
+    if (ans === "skip") {
+      delGame(ctx.bot.id, ctx.n.remoteJid);
+      return { text: `⏭️ Skip. Jawabannya: ${g.data.subject}` };
+    }
+    if (g.data.answers.includes(ans)) {
+      delGame(ctx.bot.id, ctx.n.remoteJid);
+      record(true);
+      return { text: `✅ Benar! ${g.data.subject}. Skor +1.` };
+    }
+    return { text: "❌ Belum tepat, coba lagi! (atau 'skip')" };
+  }
+  if (g.kind === "flashcard") {
+    if (ans === "next") {
+      g.data.idx = (g.data.idx + 1) % g.data.cards.length;
+      const card = g.data.cards[g.data.idx];
+      return {
+        text: box("🗂️ FLASHCARD", [
+          `(${g.data.idx + 1}/${g.data.cards.length})`,
+          `Istilah : ${card.term}`,
+          "Ketik jawaban definisinya, atau 'next' untuk lewat.",
+        ]),
+      };
+    }
+    if (ans === "stop") {
+      delGame(ctx.bot.id, ctx.n.remoteJid);
+      return { text: "🗂️ Flashcard selesai." };
+    }
+    const card = g.data.cards[g.data.idx];
+    const close =
+      ans.includes(card.def.toLowerCase().slice(0, 8)) || card.def.toLowerCase().includes(ans) || ans.includes(card.def.toLowerCase());
+    if (close) {
+      g.data.idx = (g.data.idx + 1) % g.data.cards.length;
+      const next = g.data.cards[g.data.idx];
+      return {
+        text: `✅ Tepat!\n\n${box("🗂️ FLASHCARD", [`(${g.data.idx + 1}/${g.data.cards.length})`, `Istilah : ${next.term}`, "Ketik jawaban, 'next', atau 'stop'."])}`,
+      };
+    }
+    return { text: `❌ Belum. Petunjuk: definisi diawali "${card.def.slice(0, 20)}..."` };
+  }
+  return null;
+}
+
+/* ------------------------- owner-only: logs etc ------------------------- */
+export async function logsCmd(ctx: CmdCtx): Promise<CmdResult> {
+  const rows = await db
+    .select()
+    .from(logs)
+    .where(eq(logs.botId, ctx.bot.id))
+    .orderBy(desc(logs.createdAt))
+    .limit(10);
+  if (!rows.length) return { text: "Log kosong." };
+  return {
+    text: box("📜 LOG TERBARU", rows.map((l) => `[${new Date(l.createdAt).toLocaleTimeString("id-ID")}] ${l.level}: ${truncate(l.message, 60)}`)),
+  };
+}
+
+export { isNull, gte };
+
+
+export async function donasi(ctx: CmdCtx): Promise<CmdResult> {
+  return {
+    text: box("💎 DONASI", [
+      "Support WATER AI CLOUD biar makin kenceng 🚀",
+      "",
+      "Hubungi owner untuk info donasi:",
+      "Telegram: @b1mxzstore",
+      "WhatsApp: wa.me/+6283115955196",
+      "",
+      "Makasih banyak! 🙏",
+    ]),
+  };
+}
+
+/* ========================= TIC-TAC-TOE (interactive) ========================= */
+
+/* ============================== TICTACTOE (premium + multiplayer) ============================== */
+type TttCell = "" | "X" | "O";
+interface TttState {
+  board: TttCell[];
+  turn: "X" | "O";
+  /** mark owned by the human who started vs AI; in pvp X is host */
+  player: "X" | "O";
+  scores: { win: number; lose: number; draw: number };
+  over: boolean;
+  winner: TttCell | "draw" | null;
+  smart: boolean;
+  mode: "ai" | "pvp";
+  playerXJid?: string;
+  playerOJid?: string;
+  pendingInviteJid?: string;
+  hostJid?: string;
+  /** chat JID where the host started the invite (group or private) */
+  hostChat?: string;
+  gameId?: string;
+  /** Online multiplayer room credentials used by the Rich HTML client. */
+  roomId?: string;
+  hostToken?: string;
+  guestToken?: string;
+}
+
+function tttEmpty(): TttCell[] {
+  return ["", "", "", "", "", "", "", "", ""];
+}
+
+const tttLines = [
+  [0, 1, 2],
+  [3, 4, 5],
+  [6, 7, 8],
+  [0, 3, 6],
+  [1, 4, 7],
+  [2, 5, 8],
+  [0, 4, 8],
+  [2, 4, 6],
+];
+
+function tttWinner(b: TttCell[]): TttCell | "draw" | null {
+  for (const [a, c, d] of tttLines) {
+    if (b[a] && b[a] === b[c] && b[a] === b[d]) return b[a];
+  }
+  if (b.every((x) => x)) return "draw";
+  return null;
+}
+
+function tttWinCells(b: TttCell[]): number[] {
+  for (const line of tttLines) {
+    const [a, c, d] = line;
+    if (b[a] && b[a] === b[c] && b[a] === b[d]) return line;
+  }
+  return [];
+}
+
+/** Perfect minimax AI */
+function tttBestMove(board: TttCell[], ai: TttCell): number {
+  const human: TttCell = ai === "X" ? "O" : "X";
+  const empty = board.map((v, i) => (v ? -1 : i)).filter((i) => i >= 0);
+  if (!empty.length) return -1;
+
+  let bestScore = -Infinity;
+  let bestMove = empty[0];
+
+  const minimax = (b: TttCell[], maximizing: boolean, depth: number): number => {
+    const result = tttWinner(b);
+    if (result === ai) return 10 - depth;
+    if (result === human) return depth - 10;
+    if (result === "draw") return 0;
+
+    const moves = b.map((v, i) => (v ? -1 : i)).filter((i) => i >= 0);
+    if (maximizing) {
+      let score = -Infinity;
+      for (const i of moves) {
+        b[i] = ai;
+        score = Math.max(score, minimax(b, false, depth + 1));
+        b[i] = "";
+      }
+      return score;
+    }
+    let score = Infinity;
+    for (const i of moves) {
+      b[i] = human;
+      score = Math.min(score, minimax(b, true, depth + 1));
+      b[i] = "";
+    }
+    return score;
+  };
+
+  for (const i of empty) {
+    const next = board.slice() as TttCell[];
+    next[i] = ai;
+    const score = minimax(next, false, 0);
+    if (score > bestScore) {
+      bestScore = score;
+      bestMove = i;
+    }
+  }
+  return bestMove;
+}
+
+function tttTag(jid?: string): string {
+  if (!jid) return "-";
+  const n = String(jid).split("@")[0].split(":")[0];
+  return n ? `@${n}` : "-";
+}
+
+function tttRenderText(st: TttState): string {
+  const modeLabel = st.mode === "pvp" ? "MULTIPLAYER" : "VS AI CERDAS";
+  if (st.pendingInviteJid) {
+    return (
+      `❌ *TIC-TAC-TOE* ⭕ · ${modeLabel}\n` +
+      `⏳ Menunggu *${tttTag(st.pendingInviteJid)}* menerima undangan...\n` +
+      `Host: ${tttTag(st.hostJid)}\n` +
+      `Teman: ketik *.ttt terima* atau *.ttt tolak*`
+    );
+  }
+  const status = st.over
+    ? st.winner === "draw"
+      ? "🤝 Seri!"
+      : st.mode === "pvp"
+        ? st.winner === "X"
+          ? `🏆 ${tttTag(st.playerXJid)} (X) menang!`
+          : `🏆 ${tttTag(st.playerOJid)} (O) menang!`
+        : st.winner === st.player
+          ? "🏆 Kamu menang!"
+          : "🤖 Bot menang!"
+    : st.mode === "pvp"
+      ? `Giliran: ${st.turn === "X" ? tttTag(st.playerXJid) + " (X)" : tttTag(st.playerOJid) + " (O)"}`
+      : `Giliran: ${st.turn === st.player ? "Kamu (" + st.player + ")" : "Bot (" + st.turn + ")"}`;
+  return (
+    `❌ *TIC-TAC-TOE* ⭕ · ${modeLabel}\n` +
+    `${status}\n` +
+    `Menang: ${st.scores.win} · Kalah: ${st.scores.lose} · Seri: ${st.scores.draw}`
+  );
+}
+
+function tttButtons(st: TttState): { id: string; text: string }[] {
+  if (st.pendingInviteJid) {
+    return [
+      { id: "TTT_ACCEPT", text: "✅ Terima" },
+      { id: "TTT_REJECT", text: "❌ Tolak" },
+      { id: "TTT_RESIGN", text: "🏳️ Batal" },
+    ];
+  }
+  if (st.over) {
+    return [
+      { id: "TTT_AGAIN", text: "🔄 Main Ulang" },
+      { id: "TTT_AI", text: "🤖 VS Bot" },
+      { id: "TTT_PVP", text: "👥 Multiplayer" },
+      { id: "TTT_RESIGN", text: "🏳️ Tutup" },
+    ];
+  }
+  return [
+    { id: "TTT_HINT", text: "💡 Hint" },
+    { id: "TTT_AGAIN", text: "🔄 Main Ulang" },
+    { id: "TTT_RESIGN", text: "🏳️ Menyerah" },
+  ];
+}
+
+function tttMoveList(st: TttState) {
+  if (st.over || st.pendingInviteJid) return undefined;
+  const rows = st.board.map((cell, i) => ({
+    id: `TTT_CELL_${i}`,
+    title: cell ? `${cell === "X" ? "❌" : "⭕"} Kotak ${i + 1}` : `⬜ Kotak ${i + 1}`,
+    description: cell ? "Sudah terisi" : `Tap untuk menaruh ${st.turn}`,
+  }));
+  return {
+    title: "❌ TIC-TAC-TOE ⭕",
+    buttonText: "Pilih Kotak",
+    footer: "WATER AI · REALTIME · TANPA BUKA BROWSER",
+    sections: [{ title: "Papan 1–9 · Tap untuk bermain", rows }],
+  };
+}
+
+async function tttBoardImage(st: TttState): Promise<Buffer | null> {
+  try {
+    const { renderTttBoard } = await import("../interactive/render/tttBoard");
+    const statusLine = st.pendingInviteJid
+      ? `Menunggu ${tttTag(st.pendingInviteJid)}...`
+      : st.over
+        ? st.winner === "draw"
+          ? "SERI"
+          : st.winner === "X"
+            ? "X MENANG"
+            : "O MENANG"
+        : st.mode === "pvp"
+          ? `Giliran ${st.turn}`
+          : `Giliran: ${st.turn === st.player ? "Kamu" : "Bot"} (${st.turn})`;
+    return await renderTttBoard({
+      board: st.board,
+      turn: st.turn,
+      mode: st.mode,
+      statusLine,
+      subtitle:
+        st.mode === "pvp"
+          ? `X ${tttTag(st.playerXJid)}  vs  O ${tttTag(st.playerOJid || st.pendingInviteJid)}`
+          : "Mode AI Cerdas · Minimax",
+      scoreLine: `Menang ${st.scores.win} · Kalah ${st.scores.lose} · Seri ${st.scores.draw}`,
+      highlight: st.over ? tttWinCells(st.board) : [],
+      over: st.over,
+    });
+  } catch (e) {
+    console.error("[TTT] board render failed", e);
+    return null;
+  }
+}
+
+function tttNormalizeInviteTarget(raw: string, ctx: CmdCtx): string | null {
+  const mentioned =
+    (ctx as any).mentionedJids?.[0] ||
+    (ctx as any).n?.mentionedJids?.[0] ||
+    null;
+  if (mentioned) return String(mentioned);
+  // @628xxx or 628xxx or 08xxx
+  const m = raw.match(/(?:@)?(\d{8,15})/);
+  if (!m) return null;
+  let d = m[1];
+  if (d.startsWith("0")) d = "62" + d.slice(1);
+  if (d.startsWith("8") && d.length <= 13) d = "62" + d;
+  return `${d}@s.whatsapp.net`;
+}
+
+/**
+ * Coba HTML live di bubble (sendRichHtml / GenAI) jika library + client WA support.
+ * Fallback: gambar papan di bubble.
+ */
+async function tttResponse(
+  ctx: CmdCtx,
+  st: TttState,
+  extraText?: string
+): Promise<CmdResult> {
+  const howTo = st.over
+    ? "\n\n`.ttt` main lagi · `.ttt multi` undang teman"
+    : st.pendingInviteJid
+      ? "\n\nTeman: `.ttt terima` / `.ttt tolak`"
+      : "\n\nMain di media HTML · atau `.ttt 1`…`9`";
+  const caption =
+    (extraText ? extraText + "\n\n" : "") + tttRenderText(st) + howTo;
+
+  // LIVE HTML menjadi media utama. Jika Rich HTML gagal/ditolak client,
+  // fallback ke PNG interaktif berbasis tombol supaya game tetap terlihat.
+  try {
+    const { buildTttHtml } = await import("../games/html-board");
+    const { sendRichHtmlToChat } = await import("../games/send-rich-html");
+    const html = buildTttHtml({
+      title: "TIC-TAC-TOE · WATER AI",
+      size: 3,
+      status: st.over
+        ? st.winner === "draw"
+          ? "Seri!"
+          : `${st.winner} menang!`
+        : `Giliran ${st.turn}`,
+      mode: st.mode === "pvp" ? "pvp" : "ai",
+      board: st.board,
+      turn: st.turn,
+    });
+    const rich = await sendRichHtmlToChat(ctx.sock, ctx.n.remoteJid, html, {
+      title: "Tic-Tac-Toe · WATER AI",
+      id: `ttt-${st.gameId || "x"}`,
+      source: "water_ai_ttt",
+    });
+    if (rich.ok) return { handled: true };
+    console.error("[TTT] rich html unavailable:", rich.error);
+  } catch (e: any) {
+    console.error("[TTT] rich html", e?.message || e);
+  }
+
+  const img = await tttBoardImage(st);
+  if (img) {
+    return {
+      buttons: tttButtons(st),
+      list: tttMoveList(st),
+      media: {
+        kind: "image" as const,
+        buffer: img,
+        mimetype: "image/png",
+        caption,
+      },
+    };
+  }
+  return {
+    text: caption,
+    buttons: tttButtons(st),
+    list: tttMoveList(st),
+  };
+}
+
+export async function tictactoe(ctx: CmdCtx): Promise<CmdResult> {
+  const arg = (ctx.arg || "").trim().toLowerCase();
+  const existing = getGame(ctx.bot.id, ctx.n.remoteJid, "tictactoe");
+  let st: TttState | null =
+    existing?.kind === "tictactoe" ? (existing.data as TttState) : null;
+
+  // Keep html as optional offline pack (not default)
+  if (arg === "html" || arg === "web") {
+    try {
+      const { buildTttHtml } = await import("../games/html-board");
+      const html = buildTttHtml({ title: "TIC-TAC-TOE · WATER AI" });
+      return {
+        text: "📦 Paket HTML offline (opsional). Game utama tetap di bubble chat.",
+        media: {
+          kind: "document" as const,
+          buffer: Buffer.from(html, "utf8"),
+          filename: "tictactoe-water-ai.html",
+          mimetype: "text/html",
+          caption: "TTT HTML offline",
+        },
+      };
+    } catch (e: any) {
+      return { text: `❌ ${e?.message ?? e}` };
+    }
+  }
+
+  const startAi = (playerFirst = true) => {
+    const board = tttEmpty();
+    const turn: "X" | "O" = playerFirst ? "X" : "O";
+    const scores = st?.scores || { win: 0, lose: 0, draw: 0 };
+    st = {
+      board,
+      turn,
+      player: "X",
+      scores,
+      over: false,
+      winner: null,
+      smart: true,
+      mode: "ai",
+      playerXJid: ctx.n.sender,
+      hostJid: ctx.n.sender,
+      gameId: randomUUID(),
+    };
+    if (!playerFirst) {
+      const mv = tttBestMove(board, "O");
+      if (mv >= 0) board[mv] = "O";
+      st.turn = "X";
+    }
+    setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "tictactoe", data: st, startedAt: Date.now() });
+  };
+
+  // ---- invite: .ttt undang / invite by phone (private + grup) ----
+  const inviteMatch = arg.match(/^(undang|invite|challange|challenge)\s+(.+)$/i);
+  if (inviteMatch) {
+    const target = tttNormalizeInviteTarget(inviteMatch[2], ctx);
+    if (!target) {
+      return { text: "Format: `.ttt invite 0812xxxxxxx` atau `.ttt undang 628xxxxxxxxxx`" };
+    }
+    const targetNum = target.split("@")[0];
+    const selfNum = String(ctx.n.sender).split("@")[0].split(":")[0];
+    if (targetNum === selfNum) return { text: "❌ Tidak bisa mengundang diri sendiri." };
+
+    const gameId = randomUUID();
+    const onlineRoom = createRoom("ttt", ctx.n.sender, createTttState({ isAi: false, playerX: ctx.n.sender }));
+    const invited = inviteGuest(onlineRoom.id, target.split("@")[0]);
+    if (!invited.ok || !invited.room) return { text: `❌ ${invited.error || "Gagal membuat room online"}` };
+    st = {
+      board: tttEmpty(),
+      turn: "X",
+      player: "X",
+      scores: st?.scores || { win: 0, lose: 0, draw: 0 },
+      over: false,
+      winner: null,
+      smart: false,
+      mode: "pvp",
+      playerXJid: ctx.n.sender,
+      pendingInviteJid: target,
+      hostJid: ctx.n.sender,
+      hostChat: ctx.n.remoteJid,
+      gameId,
+      roomId: onlineRoom.id,
+      hostToken: onlineRoom.hostToken,
+      guestToken: onlineRoom.guestToken,
+    };
+    setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "tictactoe", data: st, startedAt: Date.now() });
+    setGame(ctx.bot.id, target, { kind: "tictactoe", data: { ...st }, startedAt: Date.now() });
+
+    try {
+      const { buildTttHtml, attachOnlineGameHtml } = await import("../games/html-board");
+      const { sendRichHtmlToChat } = await import("../games/send-rich-html");
+      const html = attachOnlineGameHtml(
+        buildTttHtml({ title: "UNDANGAN TTT · WATER AI", mode: "pvp" }),
+        { kind: "ttt", roomId: onlineRoom.id, token: onlineRoom.guestToken!, side: "guest", apiBase: `${APP_URL}/api/games` },
+      );
+      const sent = await sendRichHtmlToChat(ctx.sock, target, html, {
+        title: "🎮 Undangan TTT Online",
+        id: `ttt-inv-${gameId.slice(0, 8)}`,
+        source: "water_ai_ttt_invite",
+      });
+      if (!sent.ok) {
+        await ctx.sock.sendMessage(target, { text: `🎮 Undangan Tic-Tac-Toe Online\n\nDari: ${selfNum}\nKetik *.ttt terima* untuk bergabung.\n\nMedia HTML gagal dikirim: ${sent.error || "client tidak mendukung Rich HTML"}` });
+      }
+    } catch (e: any) {
+      console.error("[ttt invite]", e?.message || e);
+    }
+
+    return {
+      text:
+        `🎮 *UNDANGAN TERKIRIM*\n\n` +
+        `Host (X): kamu\nLawan (O): ${targetNum}\nKode: ${gameId.slice(0, 8)}\n\n` +
+        `Media HTML undangan dikirim ke nomor lawan.\n` +
+        `Lawan ketik *.ttt terima* untuk mulai (real-time lewat bot).`,
+    };
+  }
+
+  if (arg === "terima" || arg === "accept" || arg === "ya") {
+    if (!st?.pendingInviteJid) return { text: "Tidak ada undangan aktif." };
+    const inv = String(st.pendingInviteJid).split("@")[0].split(":")[0];
+    const me = String(ctx.n.sender).split("@")[0].split(":")[0];
+    if (inv !== me) return { text: "⛔ Undangan ini bukan untuk kamu." };
+    st.playerOJid = ctx.n.sender;
+    st.pendingInviteJid = undefined;
+    st.mode = "pvp";
+    st.turn = "X";
+    const onlineRoom = st.roomId ? getRoom(st.roomId) : null;
+    if (!onlineRoom) return { text: "❌ Room online sudah tidak tersedia. Buat undangan baru." };
+    const accepted = acceptRoom(onlineRoom.id, ctx.n.sender);
+    if (!accepted.ok || !accepted.room?.guestToken) return { text: "❌ Gagal mengaktifkan room online." };
+    setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "tictactoe", data: st, startedAt: Date.now() });
+    try {
+      const { buildTttHtml, attachOnlineGameHtml } = await import("../games/html-board");
+      const { sendRichHtmlToChat } = await import("../games/send-rich-html");
+      const baseHtml = buildTttHtml({ title: "TIC-TAC-TOE ONLINE · WATER AI", mode: "pvp" });
+      const hostHtml = attachOnlineGameHtml(baseHtml, { kind: "ttt", roomId: accepted.room.id, token: accepted.room.hostToken, side: "host", apiBase: `${APP_URL}/api/games` });
+      const guestHtml = attachOnlineGameHtml(baseHtml, { kind: "ttt", roomId: accepted.room.id, token: accepted.room.guestToken, side: "guest", apiBase: `${APP_URL}/api/games` });
+      await sendRichHtmlToChat(ctx.sock, st.hostChat || ctx.n.remoteJid, hostHtml, { title: "🎮 Tic-Tac-Toe Online", id: `ttt-on-host-${Date.now().toString(36)}`, source: "water_ai_ttt" });
+      await sendRichHtmlToChat(ctx.sock, ctx.n.remoteJid, guestHtml, { title: "🎮 Tic-Tac-Toe Online", id: `ttt-on-guest-${Date.now().toString(36)}`, source: "water_ai_ttt" });
+      return { text: `✅ ${tttTag(ctx.n.sender)} bergabung sebagai *O*!\n${tttTag(st.playerXJid)} (X) mulai dulu.\n\n🎮 Media HTML online sudah dikirim ke kedua HP. Tap kotak di media untuk bermain real-time.` };
+    } catch (e:any) {
+      return { text: `⚠️ ${tttTag(ctx.n.sender)} bergabung, tetapi media HTML online gagal dikirim: ${e?.message || e}` };
+    }
+  }
+
+  if (arg === "tolak" || arg === "reject" || arg === "no") {
+    if (!st?.pendingInviteJid) return { text: "Tidak ada undangan aktif." };
+    const inv = String(st.pendingInviteJid).split("@")[0].split(":")[0];
+    const me = String(ctx.n.sender).split("@")[0].split(":")[0];
+    const host = String(st.hostJid || "").split("@")[0].split(":")[0];
+    if (inv !== me && host !== me) return { text: "⛔ Hanya penerima undangan / host yang bisa menolak." };
+    delGame(ctx.bot.id, ctx.n.remoteJid, "tictactoe");
+    return { text: "❌ Undangan dibatalkan. Ketik *.ttt* untuk main vs bot." };
+  }
+
+  if (arg === "multi" || arg === "pvp" || arg === "teman") {
+    return {
+      text:
+        "👥 *Mode Multiplayer Tic-Tac-Toe*\n\n" +
+        "Di **grup**, undang teman:\n" +
+        "• `.ttt undang @628xxx`\n" +
+        "• `.ttt undang 628xxxxxxxxxx`\n\n" +
+        "Teman: `.ttt terima`\n" +
+        "Main: `.ttt 1` … `.ttt 9`\n" +
+        "Papan di-update live di bubble chat (gambar, tanpa tombol).",
+    };
+  }
+
+  // Ownership: only active players may move
+  const isPlayer = (jid: string) => {
+    if (!st) return true;
+    if (st.mode === "ai") return !st.playerXJid || st.playerXJid === jid || String(st.playerXJid).split("@")[0] === String(jid).split("@")[0].split(":")[0];
+    const a = String(jid).split("@")[0].split(":")[0];
+    const x = String(st.playerXJid || "").split("@")[0].split(":")[0];
+    const o = String(st.playerOJid || "").split("@")[0].split(":")[0];
+    return a === x || a === o;
+  };
+
+  if (st && !st.pendingInviteJid && !st.over && !isPlayer(ctx.n.sender) && !["new", "ulang", "again", "first", "pertama", "ai", "bot"].includes(arg)) {
+    return { text: "⛔ Game ini sedang dimainkan pemain lain. Ketik *.ttt new* untuk game baru (host)." };
+  }
+
+  if (!st || arg === "new" || arg === "ulang" || arg === "again" || arg === "ai" || arg === "bot") {
+    startAi(true);
+  } else if (arg === "first" || arg === "pertama") {
+    startAi(true);
+  } else if (arg === "resign" || arg === "nyerah") {
+    delGame(ctx.bot.id, ctx.n.remoteJid, "tictactoe");
+    return { text: "🏳️ Tic-Tac-Toe dibatalkan. Ketik *.ttt* untuk main lagi." };
+  } else if (/^[1-9]$/.test(arg) && st && !st.over && !st.pendingInviteJid) {
+    const idx = parseInt(arg, 10) - 1;
+    if (st.board[idx]) {
+      return tttResponse(ctx, st, "⚠️ Kotak sudah terisi.");
+    }
+    // Whose turn?
+    if (st.mode === "pvp") {
+      const me = String(ctx.n.sender).split("@")[0].split(":")[0];
+      const expected =
+        st.turn === "X"
+          ? String(st.playerXJid || "").split("@")[0].split(":")[0]
+          : String(st.playerOJid || "").split("@")[0].split(":")[0];
+      if (me !== expected) {
+        return tttResponse(ctx, st, "⏳ Bukan giliranmu.");
+      }
+      st.board[idx] = st.turn;
+      const w = tttWinner(st.board);
+      if (w) {
+        st.over = true;
+        st.winner = w;
+        if (w === "draw") st.scores.draw++;
+        else if (w === "X") st.scores.win++;
+        else st.scores.lose++;
+      } else {
+        st.turn = st.turn === "X" ? "O" : "X";
+      }
+    } else {
+      // AI mode
+      if (st.turn !== st.player) {
+        return tttResponse(ctx, st, "⏳ Tunggu giliran bot...");
+      }
+      st.board[idx] = st.player;
+      let w = tttWinner(st.board);
+      if (w) {
+        st.over = true;
+        st.winner = w;
+        if (w === "draw") st.scores.draw++;
+        else if (w === st.player) st.scores.win++;
+        else st.scores.lose++;
+      } else {
+        st.turn = st.player === "X" ? "O" : "X";
+        const aiMark: TttCell = st.player === "X" ? "O" : "X";
+        const mv = st.smart ? tttBestMove(st.board, aiMark) : st.board.findIndex((c) => !c);
+        if (mv >= 0) st.board[mv] = aiMark;
+        w = tttWinner(st.board);
+        if (w) {
+          st.over = true;
+          st.winner = w;
+          if (w === "draw") st.scores.draw++;
+          else if (w === st.player) st.scores.win++;
+          else st.scores.lose++;
+        } else {
+          st.turn = st.player;
+        }
+      }
+    }
+    setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "tictactoe", data: st, startedAt: Date.now() });
+  } else if (arg === "hint" && st && !st.over) {
+    const mv = tttBestMove(st.board, st.turn) + 1;
+    return tttResponse(ctx, st, `💡 Hint: coba kotak *${mv}*`);
+  } else if (st && !st.over && arg && !/^[1-9]$/.test(arg)) {
+    return tttResponse(ctx, st, "Pilih kotak lewat tombol/list di bawah.");
+  }
+
+  if (!st) startAi(true);
+  return tttResponse(ctx, st!);
+}
+
+export const ttt = tictactoe;
+export const tictac = tictactoe;
+
+/* ============================== ALL GAMES (Poki-style hub) ============================== */
 export async function allgames(ctx: CmdCtx): Promise<CmdResult> {
   const arg = (ctx.arg || "").trim().toLowerCase();
 

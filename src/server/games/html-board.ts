@@ -14,6 +14,8 @@ export function buildChessHtml(opts?: {
   difficulty?: "easy" | "normal" | "hard";
 }): string {
   const candidates = [
+    path.join(process.cwd(), "CHESS4.html"),
+    path.join(process.cwd(), "public", "CHESS4.html"),
     path.join(process.cwd(), "CHESS3.html"),
     path.join(process.cwd(), "public", "CHESS3.html"),
     path.join(__dirname, "CHESS3.html"),
@@ -27,7 +29,7 @@ export function buildChessHtml(opts?: {
       }
     } catch {}
   }
-  if (!html) throw new Error("CHESS3.html tidak ditemukan di deployment.");
+  if (!html) throw new Error("CHESS4.html tidak ditemukan di deployment.");
 
   const title = String(opts?.title || "♟ CHESS CAP — Bimzofficial")
     .replace(/[<>&"]/g, "");
