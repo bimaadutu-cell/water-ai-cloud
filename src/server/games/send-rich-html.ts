@@ -1,15 +1,15 @@
 /**
- * Kirim HTML interaktif ke bubble via API Baileys yang support GenAI / Rich HTML.
+ * Send a real WhatsApp GenAI/Rich HTML WebView.
+ *
+ * Important: the HTML primitive is not the same thing as a normal
+ * `sendMessage({ html: ... })` payload. We deliberately use the rich HTML
+ * builder exposed by the Baileys fork and send a BODY/STYLE/SCRIPT fragment,
+ * while keeping the source document in the repository for local testing.
  */
-
 import { createRequire } from "node:module";
 import path from "node:path";
 
-export type RichHtmlResult = {
-  ok: boolean;
-  method?: string;
-  error?: string;
-};
+export type RichHtmlResult = { ok: boolean; method?: string; error?: string };
 
 function randomId(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -17,47 +17,25 @@ function randomId(prefix: string) {
 
 export function ensureFullHtml(html: string, title = "WATER AI"): string {
   const s = String(html || "").trim();
-  if (/<!DOCTYPE html|<html[\s>]/i.test(s)) return s;
-  return `<!DOCTYPE html><html lang="id"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>${title}</title></head><body>${s}</body></html>`;
+  if (/<!doctype html|<html[\s>]/i.test(s)) return s;
+  return `<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><title>${title}</title></head><body>${s}</body></html>`;
 }
 
-
-/**
- * WhatsApp's sendRichHtml expects HTML content for the live web view,
- * not a complete <!doctype html><html><head>...</head> document.
- * Passing a full document can render as an empty/black bubble on clients
- * that sanitize the HTML envelope. Convert the supplied document into a
- * self-contained fragment while preserving <style> and <script>.
- */
+/** Keep CSS + body + JS, but remove the outer document shell. */
 export function toRichHtmlFragment(html: string): string {
   const full = ensureFullHtml(html);
-  const headMatch = full.match(/<head\b[^>]*>([\s\S]*?)<\/head>/i);
-  const bodyMatch = full.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i);
-
-  const head = headMatch?.[1] || "";
-  const body = bodyMatch?.[1] || full;
-
-  const styles = [...head.matchAll(/<style\b[^>]*>[\s\S]*?<\/style>/gi)]
-    .map((m) => m[0])
-    .join("\n");
-  const scriptsInHead = [...head.matchAll(/<script\b[^>]*>[\s\S]*?<\/script>/gi)]
-    .map((m) => m[0])
-    .join("\n");
-  const scriptsInBody = [...body.matchAll(/<script\b[^>]*>[\s\S]*?<\/script>/gi)]
-    .map((m) => m[0])
-    .join("\n");
+  const head = full.match(/<head\b[^>]*>([\s\S]*?)<\/head>/i)?.[1] || "";
+  const body = full.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i)?.[1] || full;
+  const styles = [...head.matchAll(/<style\b[^>]*>[\s\S]*?<\/style>/gi)].map(m => m[0]).join("\n");
+  const headScripts = [...head.matchAll(/<script\b[^>]*>[\s\S]*?<\/script>/gi)].map(m => m[0]).join("\n");
+  const bodyScripts = [...body.matchAll(/<script\b[^>]*>[\s\S]*?<\/script>/gi)].map(m => m[0]).join("\n");
   const cleanBody = body.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "");
-
-  return `${styles}${scriptsInHead}${cleanBody}${scriptsInBody}`;
+  return `${styles}\n${headScripts}\n${cleanBody}\n${bodyScripts}`;
 }
 
-function loadBaileysMod(): any {
+function loadBaileys(): any {
   try {
-    const req = createRequire(
-      typeof __filename !== "undefined"
-        ? __filename
-        : path.join(process.cwd(), "package.json")
-    );
+    const req = createRequire(path.join(process.cwd(), "package.json"));
     return req("@stazyu/baileys");
   } catch {
     return null;
@@ -68,152 +46,91 @@ export async function sendRichHtmlToChat(
   sock: any,
   jid: string,
   html: string,
-  opts?: { title?: string; id?: string; source?: string }
+  opts?: { title?: string; id?: string; source?: string; trustedSources?: string[] }
 ): Promise<RichHtmlResult> {
-  if (!sock || !jid || !html) {
-    return { ok: false, error: "missing sock/jid/html" };
-  }
+  if (!sock || !jid || !html) return { ok: false, error: "missing sock/jid/html" };
 
   const title = opts?.title || "WATER AI GAME";
   const id = opts?.id || randomId("game");
   const source = opts?.source || "water_ai_game";
-  const fullHtml = ensureFullHtml(html, title);
-  const richFragment = toRichHtmlFragment(fullHtml);
+  const full = ensureFullHtml(html, title);
+  const fragment = toRichHtmlFragment(full);
+
+  // The Chess CAP page loads this audio URL. Rich WebView network access is
+  // sandboxed, so explicitly trust the host used by the page.
+  const appTrusted = (() => {
+    try { return process.env.APP_URL ? new URL(process.env.APP_URL).hostname : null; } catch { return null; }
+  })();
+  const trustedSources = Array.from(new Set([
+    ...(opts?.trustedSources || []),
+    "files.catbox.moe",
+    ...(appTrusted ? [appTrusted] : []),
+  ]));
   const errors: string[] = [];
 
-  // 1) sock.sendRichHtml — try the COMPLETE document first.
-  // Some @stazyu/baileys builds expect a document, while others expect a
-  // sanitized fragment. The old implementation only tried the fragment,
-  // which could produce a blank/black card on clients that require <html>.
+  // 1. Preferred API: @stazyu/baileys GenAI HTML primitive.
   if (typeof sock.sendRichHtml === "function") {
-    const variants = [
-      { label: "sock.sendRichHtml(full)", html: fullHtml },
-      { label: "sock.sendRichHtml(fragment)", html: richFragment },
-    ];
-    for (const v of variants) {
-      try {
-        await sock.sendRichHtml(
-          jid,
-          { id, title, html: v.html, source, trustedSources: [source] },
-          null
-        );
-        return { ok: true, method: v.label };
-      } catch (e: any) {
-        errors.push(`${v.label}: ${String(e?.message || e).slice(0, 100)}`);
-      }
-    }
-    for (const v of variants) {
-      try {
-        await sock.sendRichHtml(jid, v.html, undefined, { title, id, source });
-        return { ok: true, method: `${v.label}-string` };
-      } catch (e: any) {
-        errors.push(`${v.label}-string: ${String(e?.message || e).slice(0, 100)}`);
-      }
+    try {
+      await sock.sendRichHtml(jid, {
+        id,
+        title,
+        html: fragment,
+        source,
+        trustedSources,
+      });
+      return { ok: true, method: "sock.sendRichHtml(fragment)" };
+    } catch (e: any) {
+      errors.push(`sock.sendRichHtml: ${String(e?.message || e).slice(0, 160)}`);
     }
   }
 
-  // 2) Package helpers
-  try {
-    const mod = loadBaileysMod();
-    if (mod?.sendRichHtml) {
-      for (const htmlVariant of [fullHtml, richFragment]) {
-        await mod.sendRichHtml(sock, jid, {
-          id,
-          title,
-          html: htmlVariant,
-          source,
-          trustedSources: [source],
-        });
-        return { ok: true, method: "mod.sendRichHtml" };
-      }
+  // 2. Package-level helper. Keep the exact same fragment and trusted host.
+  const mod = loadBaileys();
+  if (mod?.sendRichHtml) {
+    try {
+      await mod.sendRichHtml(sock, jid, {
+        id,
+        title,
+        html: fragment,
+        source,
+        trustedSources,
+      });
+      return { ok: true, method: "mod.sendRichHtml(fragment)" };
+    } catch (e: any) {
+      errors.push(`mod.sendRichHtml: ${String(e?.message || e).slice(0, 160)}`);
     }
-    if (mod?.sendInlineWebUI) {
-      await mod.sendInlineWebUI(sock, jid, richFragment, title);
-      return { ok: true, method: "sendInlineWebUI" };
+  }
+
+  // 3. Some compatible forks expose the same renderer as sendInlineWebUI.
+  if (mod?.sendInlineWebUI) {
+    try {
+      await mod.sendInlineWebUI(sock, jid, fragment, title, {
+        trustedSources,
+      });
+      return { ok: true, method: "sendInlineWebUI(fragment)" };
+    } catch (e: any) {
+      errors.push(`sendInlineWebUI: ${String(e?.message || e).slice(0, 160)}`);
     }
-    if (typeof mod?.generateRichHtmlContent === "function") {
+  }
+
+  // 4. Last rich-builder fallback, if the installed fork exports it.
+  if (typeof mod?.generateRichHtmlContent === "function") {
+    try {
       const content = mod.generateRichHtmlContent({
         id,
         title,
-        html: richFragment,
+        html: fragment,
         source,
-        trustedSources: [source],
+        trustedSources,
       });
-      if (content && typeof content === "object") {
-        await sock.sendMessage(jid, content);
-        return { ok: true, method: "generateRichHtmlContent" };
+      if (content) {
+        const sent = await sock.sendMessage(jid, content);
+        if (sent?.key?.id) return { ok: true, method: "generateRichHtmlContent" };
       }
-    }
-  } catch (e: any) {
-    errors.push(`pkg: ${String(e?.message || e).slice(0, 80)}`);
-  }
-
-  // 3) richResponse / richHtml payloads
-  const richAttempts: Array<{ name: string; payload: any }> = [
-    {
-      name: "richResponse.html",
-      payload: {
-        richResponse: {
-          id,
-          title,
-          html: richFragment,
-          source,
-          trustedSources: [source],
-        },
-      },
-    },
-    {
-      name: "richResponse.html+disclaimer",
-      payload: {
-        richResponse: {
-          id,
-          title,
-          html: richFragment,
-          source,
-          trustedSources: [source],
-        },
-        disclaimerText: title,
-        headerText: title,
-      },
-    },
-    {
-      name: "richHtml",
-      payload: {
-        richHtml: {
-          id,
-          title,
-          html: richFragment,
-          source,
-          trustedSources: [source],
-        },
-      },
-    },
-    {
-      name: "htmlApp",
-      payload: {
-        html: richFragment,
-        title,
-        id,
-        source,
-        trustedSources: [source],
-      },
-    },
-  ];
-
-  for (const a of richAttempts) {
-    try {
-      const sent = await sock.sendMessage(jid, a.payload);
-      if (sent?.key?.id) {
-        return { ok: true, method: a.name };
-      }
-      errors.push(`${a.name}: no message key`);
     } catch (e: any) {
-      errors.push(`${a.name}: ${String(e?.message || e).slice(0, 80)}`);
+      errors.push(`generateRichHtmlContent: ${String(e?.message || e).slice(0, 160)}`);
     }
   }
 
-  return {
-    ok: false,
-    error: errors.slice(0, 4).join(" | ") || "no rich-html method worked",
-  };
+  return { ok: false, error: errors.join(" | ") || "Installed Baileys build exposes no Rich HTML sender" };
 }
