@@ -106,7 +106,7 @@ export async function handleInteractiveResponse(ctx: InteractiveContext): Promis
     return {
       text:
         "⚠️ Session interaktif sudah kedaluwarsa atau tidak ditemukan.\n" +
-        `Gunakan command lagi (contoh: ${ctx.prefix}play2 <judul> atau ${ctx.prefix}chess2).`,
+        `Gunakan command lagi (contoh: ${ctx.prefix}play2 <judul> atau ${ctx.prefix}chess3).`,
     };
   }
 

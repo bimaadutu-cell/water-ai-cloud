@@ -190,7 +190,7 @@ export const REGISTRY: RegistryCommand[] = [
   c("termux", "tools", "Terminal Termux interaktif: .termux"),
   c("blockblast", "fun", "Block Blast HTML: .blockblast"),
   c("blockblas", "fun", "Alias .blockblast"),
-  c("chess2", "fun", "Catur realtime di chat: .chess2 / undang teman di grup"),
+  c("chess3", "fun", "Catur realtime di chat: .chess3 / undang teman di grup"),
   c("tictactoe", "fun", "TTT premium di chat: .ttt / .ttt undang @nomor"),
   c("ttt", "fun", "Alias .tictactoe — VS AI atau multiplayer"),
   c("allgames", "fun", "Hub semua game gaya Poki: .allgames (katalog + mini-game HTML)"),

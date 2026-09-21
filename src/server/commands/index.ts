@@ -60,7 +60,7 @@ const H: Record<string, Handler> = {
   buy: info.buy,
 
   /* 🎮 FUN */
-  chess2: info.chess2,
+  chess3: info.chess3,
   tictactoe: info.tictactoe,
   ttt: info.ttt,
   tictac: info.tictac,

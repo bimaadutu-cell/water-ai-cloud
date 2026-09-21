@@ -1,5 +1,5 @@
 /**
- * Online rooms for chess2 / ttt — bot-mediated real-time sync.
+ * Online rooms for chess3 / ttt — bot-mediated real-time sync.
  * Host invites guest by phone; both get HTML updates after each move.
  */
 export type GameKind = "chess" | "ttt";

@@ -81,23 +81,34 @@ export async function sendRichHtmlToChat(
   const richFragment = toRichHtmlFragment(fullHtml);
   const errors: string[] = [];
 
-  // 1) sock.sendRichHtml
+  // 1) sock.sendRichHtml — try the COMPLETE document first.
+  // Some @stazyu/baileys builds expect a document, while others expect a
+  // sanitized fragment. The old implementation only tried the fragment,
+  // which could produce a blank/black card on clients that require <html>.
   if (typeof sock.sendRichHtml === "function") {
-    try {
-      await sock.sendRichHtml(
-        jid,
-        { id, title, html: richFragment, source, trustedSources: [source] },
-        null
-      );
-      return { ok: true, method: "sock.sendRichHtml" };
-    } catch (e: any) {
-      errors.push(`sendRichHtml: ${String(e?.message || e).slice(0, 100)}`);
+    const variants = [
+      { label: "sock.sendRichHtml(full)", html: fullHtml },
+      { label: "sock.sendRichHtml(fragment)", html: richFragment },
+    ];
+    for (const v of variants) {
+      try {
+        await sock.sendRichHtml(
+          jid,
+          { id, title, html: v.html, source, trustedSources: [source] },
+          null
+        );
+        return { ok: true, method: v.label };
+      } catch (e: any) {
+        errors.push(`${v.label}: ${String(e?.message || e).slice(0, 100)}`);
+      }
     }
-    try {
-      await sock.sendRichHtml(jid, richFragment, undefined, { title, id, source });
-      return { ok: true, method: "sock.sendRichHtml(string)" };
-    } catch (e: any) {
-      errors.push(`sendRichHtml-str: ${String(e?.message || e).slice(0, 80)}`);
+    for (const v of variants) {
+      try {
+        await sock.sendRichHtml(jid, v.html, undefined, { title, id, source });
+        return { ok: true, method: `${v.label}-string` };
+      } catch (e: any) {
+        errors.push(`${v.label}-string: ${String(e?.message || e).slice(0, 100)}`);
+      }
     }
   }
 
@@ -105,14 +116,16 @@ export async function sendRichHtmlToChat(
   try {
     const mod = loadBaileysMod();
     if (mod?.sendRichHtml) {
-      await mod.sendRichHtml(sock, jid, {
-        id,
-        title,
-        html: richFragment,
-        source,
-        trustedSources: [source],
-      });
-      return { ok: true, method: "mod.sendRichHtml" };
+      for (const htmlVariant of [fullHtml, richFragment]) {
+        await mod.sendRichHtml(sock, jid, {
+          id,
+          title,
+          html: htmlVariant,
+          source,
+          trustedSources: [source],
+        });
+        return { ok: true, method: "mod.sendRichHtml" };
+      }
     }
     if (mod?.sendInlineWebUI) {
       await mod.sendInlineWebUI(sock, jid, richFragment, title);

@@ -689,7 +689,7 @@ export async function flashcard(ctx: CmdCtx): Promise<CmdResult> {
 
 /** Process a plain-text answer for pending games. Returns reply or null. */
 
-/* ============================== CHESS2 ============================== */
+/* ============================== CHESS3 ============================== */
 const CHESS_PIECES: Record<string, string> = {
   K: "♔", Q: "♕", R: "♖", B: "♗", N: "♘", P: "♙",
   k: "♚", q: "♛", r: "♜", b: "♝", n: "♞", p: "♟",
@@ -722,12 +722,12 @@ function chessRender(board: (string | null)[][], turn: "w" | "b"): string {
   }
   lines.push(files);
   return (
-    `♟️ *CHESS2* — VS BOT · FUN MODE\n` +
+    `♟️ *CHESS3* — VS BOT · FUN MODE\n` +
     `Giliran: *${turn === "w" ? "Kamu (Putih)" : "Bot (Hitam)"}*\n\n` +
     "```\n" +
     lines.join("\n") +
     "\n```\n" +
-    `Gerak: \`.chess2 e2e4\` · Batal: \`.chess2 resign\` · Baru: \`.chess2 new\``
+    `Gerak: \`.chess3 e2e4\` · Batal: \`.chess3 resign\` · Baru: \`.chess3 new\``
   );
 }
 
@@ -814,7 +814,7 @@ async function chessBoardImage(
       turn,
       selected: selected || null,
       targets: targets || [],
-      title: "CHESS2",
+      title: "CHESS3",
       subtitle: subtitle || (turn === "w" ? "Giliran kamu" : "Bot sedang berpikir..."),
       statusLine:
         statusLine ||
@@ -822,7 +822,7 @@ async function chessBoardImage(
       overlayLines: overlay,
     });
   } catch (e) {
-    console.error("[CHESS2] board render failed", e);
+    console.error("[CHESS3] board render failed", e);
     return null;
   }
 }
@@ -977,10 +977,10 @@ const CHESS_BTNS = [
   { id: "CHESS_NEW", text: "GAME BARU" },
 ];
 
-export async function chess2(ctx: CmdCtx): Promise<CmdResult> {
+export async function chess3(ctx: CmdCtx): Promise<CmdResult> {
   const arg = (ctx.arg || "").trim().toLowerCase();
   const requestedDifficulty = /^(easy|normal|hard)$/.test(arg) ? (arg as "easy" | "normal" | "hard") : null;
-  const existing = getGame(ctx.bot.id, ctx.n.remoteJid, "chess2");
+  const existing = getGame(ctx.bot.id, ctx.n.remoteJid, "chess3");
 
   // HTML offline opsional — game utama tetap gambar + tombol di bubble
   if (arg === "html" || arg === "web" || arg === "canvas") {
@@ -1006,7 +1006,7 @@ export async function chess2(ctx: CmdCtx): Promise<CmdResult> {
   const chessInvite = arg.match(/^(undang|invite)\s+(.+)$/i);
   if (chessInvite) {
     const mNum = chessInvite[2].match(/(?:@)?(\d{8,15})/);
-    if (!mNum) return { text: "Format: `.chess2 invite 0812xxxxxxx` atau `.chess2 undang 62812xxxxxxx`" };
+    if (!mNum) return { text: "Format: `.chess3 invite 0812xxxxxxx` atau `.chess3 undang 62812xxxxxxx`" };
     let d = mNum[1];
     if (d.startsWith("0")) d = "62" + d.slice(1);
     if (d.startsWith("8") && d.length <= 13) d = "62" + d;
@@ -1037,8 +1037,8 @@ export async function chess2(ctx: CmdCtx): Promise<CmdResult> {
       guestToken: onlineRoom.guestToken,
     };
     // Store on host chat + guest chat key for accept
-    setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "chess2", data, startedAt: Date.now() });
-    setGame(ctx.bot.id, targetJid, { kind: "chess2", data: { ...data, pendingInvite: true }, startedAt: Date.now() });
+    setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "chess3", data, startedAt: Date.now() });
+    setGame(ctx.bot.id, targetJid, { kind: "chess3", data: { ...data, pendingInvite: true }, startedAt: Date.now() });
 
     // Send invite to guest — gambar papan (PNG) sebagai bukti visual utama,
     // HTML rich-card dikirim best-effort saja (tidak semua client WA bisa render-nya).
@@ -1055,10 +1055,10 @@ export async function chess2(ctx: CmdCtx): Promise<CmdResult> {
         source: "water_ai_chess_invite",
       });
       if (!sent.ok) {
-        await ctx.sock.sendMessage(targetJid, { text: `♟️ Undangan Catur Online\n\nDari: ${String(ctx.n.sender).split("@")[0].split(":")[0]}\nKetik *.chess2 terima* untuk mulai.\n\nMedia HTML gagal dikirim: ${sent.error || "client tidak mendukung Rich HTML"}` });
+        await ctx.sock.sendMessage(targetJid, { text: `♟️ Undangan Catur Online\n\nDari: ${String(ctx.n.sender).split("@")[0].split(":")[0]}\nKetik *.chess3 terima* untuk mulai.\n\nMedia HTML gagal dikirim: ${sent.error || "client tidak mendukung Rich HTML"}` });
       }
     } catch (e: any) {
-      console.error("[chess2 invite]", e?.message || e);
+      console.error("[chess3 invite]", e?.message || e);
     }
 
     return {
@@ -1068,7 +1068,7 @@ export async function chess2(ctx: CmdCtx): Promise<CmdResult> {
         `Lawan (Hitam): ${d}\n` +
         `Kode: ${gameId.slice(0, 8)}\n\n` +
         `Media HTML undangan sudah dikirim ke nomor lawan.\n` +
-        `Lawan ketik *.chess2 terima* untuk mulai.\n` +
+        `Lawan ketik *.chess3 terima* untuk mulai.\n` +
         `_Sinkron real-time lewat bot (bukan simulasi lokal)._`,
       buttons: [
         { id: "CHESS_NEW", text: "GAME BARU" },
@@ -1077,8 +1077,8 @@ export async function chess2(ctx: CmdCtx): Promise<CmdResult> {
   }
 
   if (arg === "terima" || arg === "accept") {
-    const g = existing?.kind === "chess2" ? (existing.data as any) : null;
-    if (!g?.pendingInvite || !g?.opponentJid) return { text: "Tidak ada undangan catur aktif. Minta host: `.chess2 invite 08xxx`" };
+    const g = existing?.kind === "chess3" ? (existing.data as any) : null;
+    if (!g?.pendingInvite || !g?.opponentJid) return { text: "Tidak ada undangan catur aktif. Minta host: `.chess3 invite 08xxx`" };
     const inv = String(g.opponentJid).split("@")[0].split(":")[0];
     const me = String(ctx.n.sender).split("@")[0].split(":")[0];
     if (inv !== me && String(g.opponentJid) !== ctx.n.sender && String(g.opponentJid) !== ctx.n.remoteJid) {
@@ -1094,8 +1094,8 @@ export async function chess2(ctx: CmdCtx): Promise<CmdResult> {
     if (!onlineRoom) return { text: "❌ Room online sudah tidak tersedia. Buat undangan baru." };
     const accepted = acceptRoom(onlineRoom.id, ctx.n.sender);
     if (!accepted.ok || !accepted.room?.guestToken) return { text: "❌ Gagal mengaktifkan room online." };
-    setGame(ctx.bot.id, hostKey, { kind: "chess2", data: g, startedAt: Date.now() });
-    setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "chess2", data: g, startedAt: Date.now() });
+    setGame(ctx.bot.id, hostKey, { kind: "chess3", data: g, startedAt: Date.now() });
+    setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "chess3", data: g, startedAt: Date.now() });
     try {
       const { buildChessHtml, attachOnlineGameHtml } = await import("../games/html-board");
       const { sendRichHtmlToChat } = await import("../games/send-rich-html");
@@ -1104,9 +1104,9 @@ export async function chess2(ctx: CmdCtx): Promise<CmdResult> {
       const guestHtml = attachOnlineGameHtml(baseHtml, { kind: "chess", roomId: accepted.room.id, token: accepted.room.guestToken, side: "guest", apiBase: `${APP_URL}/api/games` });
       const hostSent = await sendRichHtmlToChat(ctx.sock, hostKey, hostHtml, { title: "♟️ Catur Online", id: `chess-on-host-${Date.now().toString(36)}`, source: "water_ai_chess" });
       const guestSent = await sendRichHtmlToChat(ctx.sock, ctx.n.remoteJid, guestHtml, { title: "♟️ Catur Online", id: `chess-on-guest-${Date.now().toString(36)}`, source: "water_ai_chess" });
-      if (!hostSent.ok || !guestSent.ok) console.error("[chess2 accept] rich html host/guest", hostSent.error, guestSent.error);
+      if (!hostSent.ok || !guestSent.ok) console.error("[chess3 accept] rich html host/guest", hostSent.error, guestSent.error);
     } catch (e: any) {
-      console.error("[chess2 accept]", e?.message || e);
+      console.error("[chess3 accept]", e?.message || e);
     }
     return {
       text: `✅ Kamu bergabung sebagai Hitam!\n🎮 Media HTML online dikirim ke kedua HP.\nPutih mulai — tap bidak di media untuk bermain real-time.`,
@@ -1118,8 +1118,8 @@ export async function chess2(ctx: CmdCtx): Promise<CmdResult> {
     return {
       text:
         "👥 *Catur Multiplayer*\n\n" +
-        "Di grup: `.chess2 undang @628xxx`\n" +
-        "Teman: `.chess2 terima`\n" +
+        "Di grup: `.chess3 undang @628xxx`\n" +
+        "Teman: `.chess3 terima`\n" +
         "Main lewat papan + tombol di chat (real-time bubble).",
     };
   }
@@ -1128,7 +1128,7 @@ export async function chess2(ctx: CmdCtx): Promise<CmdResult> {
   if (!arg || arg === "new" || arg === "start" || requestedDifficulty) {
     const board = chessEmptyBoard();
     setGame(ctx.bot.id, ctx.n.remoteJid, {
-      kind: "chess2",
+      kind: "chess3",
       data: { board, turn: "w", history: [], selected: null, targets: [] as string[], playerJid: ctx.n.sender, mode: "ai", difficulty: requestedDifficulty || "normal", gameId: randomUUID() },
       startedAt: Date.now(),
     });
@@ -1162,24 +1162,24 @@ export async function chess2(ctx: CmdCtx): Promise<CmdResult> {
           kind: "image" as const,
           buffer: img,
           mimetype: "image/png",
-          caption: "♟️ *CHESS · WATER AI*\nvs Bot · Giliran Putih\n\nFormat: `.chess2 e2e4`",
+          caption: "♟️ *CHESS · WATER AI*\nvs Bot · Giliran Putih\n\nFormat: `.chess3 e2e4`",
         },
       };
     }
     return {
-      text: "♟️ *CHESS · WATER AI*\nvs Bot · Giliran Putih\n" + chessRender(board, "w") + "\n\nFormat: `.chess2 e2e4`",
+      text: "♟️ *CHESS · WATER AI*\nvs Bot · Giliran Putih\n" + chessRender(board, "w") + "\n\nFormat: `.chess3 e2e4`",
       buttons: CHESS_BTNS,
     };
   }
 
   // ---- RESIGN / CANCEL ----
   if (arg === "resign" || arg === "surrender" || arg === "batal" || arg === "undo") {
-    if (arg === "undo" && existing?.kind === "chess2") {
+    if (arg === "undo" && existing?.kind === "chess3") {
       // soft undo: clear selection
       const data = existing.data as any;
       data.selected = null;
       data.targets = [];
-      setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "chess2", data, startedAt: Date.now() });
+      setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "chess3", data, startedAt: Date.now() });
       const img = await chessBoardImage(data.board, data.turn, null, [], undefined, "Pilih bidak putih terlebih dahulu.", "Giliran kamu");
       if (img) {
         return {
@@ -1193,15 +1193,15 @@ export async function chess2(ctx: CmdCtx): Promise<CmdResult> {
         };
       }
     }
-    delGame(ctx.bot.id, ctx.n.remoteJid, "chess2");
+    delGame(ctx.bot.id, ctx.n.remoteJid, "chess3");
     return {
-      text: "🏳️ Game dibatalkan. Ketik *.chess2* untuk main lagi.",
+      text: "🏳️ Game dibatalkan. Ketik *.chess3* untuk main lagi.",
       buttons: [{ id: "CHESS_NEW", text: "GAME BARU" }],
     };
   }
 
-  if (!existing || existing.kind !== "chess2") {
-    return { text: `Belum ada game. Mulai: *${ctx.bot.prefix}chess2*` };
+  if (!existing || existing.kind !== "chess3") {
+    return { text: `Belum ada game. Mulai: *${ctx.bot.prefix}chess3*` };
   }
 
   const data = existing.data as {
@@ -1256,7 +1256,7 @@ export async function chess2(ctx: CmdCtx): Promise<CmdResult> {
       data.turn = "b";
       chessBotMove(data.board);
       data.turn = "w";
-      setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "chess2", data, startedAt: Date.now() });
+      setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "chess3", data, startedAt: Date.now() });
       const img = await chessBoardImage(
         data.board,
         "w",
@@ -1303,7 +1303,7 @@ export async function chess2(ctx: CmdCtx): Promise<CmdResult> {
     const targets = chessLegalTargets(data.board, sq, "w");
     data.selected = sq;
     data.targets = targets;
-    setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "chess2", data, startedAt: Date.now() });
+    setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "chess3", data, startedAt: Date.now() });
     const img = await chessBoardImage(
       data.board,
       "w",
@@ -1371,12 +1371,12 @@ export async function chess2(ctx: CmdCtx): Promise<CmdResult> {
           kind: "image" as const,
           buffer: img,
           mimetype: "image/png",
-          caption: "Format: *.chess2 e2* lalu *.chess2 e4*  atau  *.chess2 e2e4*",
+          caption: "Format: *.chess3 e2* lalu *.chess3 e4*  atau  *.chess3 e2e4*",
         },
       };
     }
     return {
-      text: "Format gerak: *.chess2 e2e4*\n" + chessRender(data.board, data.turn),
+      text: "Format gerak: *.chess3 e2e4*\n" + chessRender(data.board, data.turn),
       buttons: CHESS_BTNS,
     };
   }
@@ -1404,7 +1404,7 @@ export async function chess2(ctx: CmdCtx): Promise<CmdResult> {
   data.turn = "b";
   chessBotMove(data.board);
   data.turn = "w";
-  setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "chess2", data, startedAt: Date.now() });
+  setGame(ctx.bot.id, ctx.n.remoteJid, { kind: "chess3", data, startedAt: Date.now() });
 
   const img = await chessBoardImage(
     data.board,

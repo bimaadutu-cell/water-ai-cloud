@@ -261,6 +261,37 @@ async function attachSocket(rb: RunningBot) {
     }
   });
 
+  // Incoming WhatsApp call handling. The current @stazyu/baileys build
+  // documents rejectCall; some compatible forks expose acceptCall as well.
+  // We only attempt native acceptance when the socket actually provides it.
+  // A real AI voice conversation still requires a VoIP/WebRTC media engine;
+  // this handler must never pretend that a text-only socket can carry AI audio.
+  sock.ev.on("call", async (calls: any) => {
+    for (const call of Array.isArray(calls) ? calls : [calls]) {
+      if (!call || call.status !== "offer") continue;
+      const from = call.from || call.chatId;
+      const id = call.id;
+      try {
+        if (typeof (sock as any).acceptCall === "function") {
+          await (sock as any).acceptCall(id, from);
+          await sock.sendMessage(from, {
+            text: "📞 Panggilan diterima. Voice AI belum aktif di engine ini karena membutuhkan media VoIP/WebRTC."
+          }).catch(() => {});
+        } else if (typeof (sock as any).rejectCall === "function") {
+          await (sock as any).rejectCall(id, from);
+          await sock.sendMessage(from, {
+            text: "📞 Panggilan terdeteksi, tetapi engine WATER AI saat ini belum memiliki media VoIP/WebRTC untuk menjawab dengan suara AI."
+          }).catch(() => {});
+        }
+      } catch (e: any) {
+        console.error("[CALL] handling failed", e?.message || e);
+        try {
+          if (typeof (sock as any).rejectCall === "function") await (sock as any).rejectCall(id, from);
+        } catch {}
+      }
+    }
+  });
+
   sock.ev.on("messages.upsert", async (upsert: any) => {
     if (upsert.type !== "notify") return;
     const bot = await getBotRow(rb.botId);
@@ -1099,14 +1130,14 @@ async function handleIncoming(rb: RunningBot, bot: BotRow, m: any) {
         if (ires) {
           const chessArg = (ires as any)._chessCmd || (ires as any)._chessMove;
           if (chessArg) {
-            // re-route to chess2 command (new / resign / undo / square / e2e4)
-            const { chess2 } = await import("./commands/info");
+            // re-route to chess3 command (new / resign / undo / square / e2e4)
+            const { chess3 } = await import("./commands/info");
             const fakeCtx = makeCmdCtx(rb, bot, m, n, t0, null);
             (fakeCtx as any).arg = String(chessArg);
             let chessResult: any;
             try {
-              chessResult = await withGameLock(bot.id, n.remoteJid, "chess2", () =>
-                chess2(fakeCtx as any)
+              chessResult = await withGameLock(bot.id, n.remoteJid, "chess3", () =>
+                chess3(fakeCtx as any)
               );
             } catch (e: any) {
               chessResult = { text: String(e?.message || e) };

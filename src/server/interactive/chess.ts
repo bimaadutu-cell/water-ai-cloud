@@ -34,7 +34,7 @@ export function createChessSession(
 }
 
 async function handleChessNew(ctx: InteractiveContext, _session: InteractiveSession) {
-  // Signal engine to run .chess2 new via special marker
+  // Signal engine to run .chess3 new via special marker
   return {
     text: "🆕 Membuka game baru...",
     // @ts-ignore
@@ -64,7 +64,7 @@ async function handleSelectFromStart(ctx: InteractiveContext, session: Interacti
     text:
       "♟ *Pilih kotak asal (bidak putih)*\n\n" +
       "Ketik misalnya: `e2` / `d2` / `g1`\n" +
-      "Atau gerak lengkap: `.chess2 e2e4`",
+      "Atau gerak lengkap: `.chess3 e2e4`",
     buttons: [
       { id: "CHESS_FROM:e2", text: "e2" },
       { id: "CHESS_FROM:d2", text: "d2" },
@@ -95,7 +95,7 @@ async function handleToMove(ctx: InteractiveContext, session: InteractiveSession
   if (!/^[a-h][1-8]$/.test(dest)) return { text: "Gerak tidak valid." };
   return {
     text: `♟️ Mencoba ke *${dest}*...`,
-    // @ts-ignore — engine re-routes to chess2 with destination square
+    // @ts-ignore — engine re-routes to chess3 with destination square
     _chessCmd: dest,
   };
 }

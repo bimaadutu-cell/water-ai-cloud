@@ -141,7 +141,7 @@ export async function renderChessBoard(opts: BoardRenderOpts): Promise<Buffer> {
     labels += `<text x="${(sidePad - 12).toFixed(1)}" y="${ry.toFixed(1)}" font-size="13" fill="${MUTED}" text-anchor="middle" font-family="Arial,sans-serif">${8 - i}</text>`;
   }
 
-  const title = opts.title || "CHESS2";
+  const title = opts.title || "CHESS3";
   const sub =
     opts.subtitle ||
     (opts.turn === "w" ? "Giliran kamu" : "Bot sedang berpikir...");
